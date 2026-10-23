@@ -1,0 +1,5 @@
+import test from 'node:test';import assert from 'node:assert/strict';
+import {METRO_STOPS,metroPose,liftHeight,insideUpper,cityBounds} from '../src/expansion.mjs';
+test('metro stops at all three stations and follows a continuous complete loop',()=>{for(let i=0;i<3;i++){const p=metroPose(i*30+2);assert.equal(p.index,i);assert.equal(p.dwell,true);assert.equal(p.x,METRO_STOPS[i].x);}let previous=metroPose(0).x;for(let t=.01;t<=90;t+=.01){const p=metroPose(t);assert.ok(Math.abs(p.x-previous)<.5);previous=p.x;}assert.equal(metroPose(90).x,metroPose(0).x);});
+test('lift travel reaches selected floors without overshoot, and upper floors have safe edges',()=>{assert.equal(liftHeight(.17,84,0),.17);assert.equal(liftHeight(.17,84,5),84);assert.equal(liftHeight(84,.17,9),.17);assert.ok(liftHeight(.17,84,2)>10);assert.ok(insideUpper({x:-31,y:-42},-24,42));assert.equal(insideUpper({x:-31,y:-42},-20,42),false);});
+test('expanded city permits the new districts but prevents walking out of the map',()=>{assert.ok(cityBounds(-240,-260));assert.ok(cityBounds(255,105));assert.equal(cityBounds(311,0),false);});

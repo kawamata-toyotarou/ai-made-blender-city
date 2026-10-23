@@ -4,6 +4,8 @@ import { RGBELoader } from '../vendor/loaders/RGBELoader.js';
 import { clone } from '../vendor/utils/SkeletonUtils.js';
 import {createTraffic,stepTraffic,signalPhase,stepDoors,blockedAt,roomAt} from './simulation.mjs';
 import {createGalaxy} from './galaxy-world.js';
+import {createExpansion} from './expansion-world.js';
+import {METRO_STOPS} from './expansion.mjs';
 import {PLANET,CITY_STOP,PLANET_STOP,JOURNEY_SECONDS,createJourney,boardJourney,advanceJourney,leaveJourney,nearStation,journeyPhase,forwardFromFeet,headingForMotion} from './journey.mjs';
 
 async function main(){
@@ -35,10 +37,11 @@ const materials=data.materials.map(m=>{
   return mat;
 });
 const binary=await new Response(new Blob([bytes(assets.city)]).stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer(),dv=new DataView(binary);let off=0;
-const groups=dv.getUint32(off,true);off+=4;let triangles=0;
+const groups=dv.getUint32(off,true);off+=4;let triangles=0;const roofHeights=(data.interiors||[]).map(()=>0);
 for(let k=0;k<groups;k++){
   const mi=dv.getUint32(off,true),n=dv.getUint32(off+4,true);off+=8;
   const values=new Float32Array(binary,off,n*8);off+=n*32;triangles+=n/3;
+  for(let j=0;j<values.length;j+=8)for(const [i,r] of (data.interiors||[]).entries())if(Math.abs(values[j]-r.x)<r.w/2&&Math.abs(values[j+2]+r.y)<r.d/2)roofHeights[i]=Math.max(roofHeights[i],values[j+1]);
   const buf=new THREE.InterleavedBuffer(values,8),g=new THREE.BufferGeometry();
   g.setAttribute('position',new THREE.InterleavedBufferAttribute(buf,3,0));g.setAttribute('normal',new THREE.InterleavedBufferAttribute(buf,3,3));g.setAttribute('uv',new THREE.InterleavedBufferAttribute(buf,2,6));
   g.computeBoundingSphere();const mesh=new THREE.Mesh(g,materials[mi]);mesh.castShadow=true;mesh.receiveShadow=true;scene.add(mesh);
@@ -71,8 +74,12 @@ for(const y of data.trafficSignals||[]){for(const x of [-11.6,11.6]){const z=-y+
 const train=new THREE.Group();train.position.set(0,15.8,-58);scene.add(train);
 const trainBody=new THREE.MeshStandardMaterial({color:0xa5b8bc,metalness:.65,roughness:.3}),trainGlass=new THREE.MeshStandardMaterial({color:0x152d38,metalness:.55,roughness:.15});
 for(let i=-1;i<=1;i++){boxMesh([7.4,2.2,2.8],[i*8,0,0],trainBody,train);boxMesh([6.6,.85,.04],[i*8,.2,1.42],trainGlass,train);boxMesh([6.5,.055,.045],[i*8,-.65,1.45],new THREE.MeshStandardMaterial({color:0x45c5da,emissive:0x45c5da,emissiveIntensity:1.5}),train);}
+const expansion=createExpansion(scene,doors,roofHeights,train);
+let metroRiding=false,metroTime=0,metroIndex=1,upper=null,liftRide=null,roverDriving=false,liftChoice=null;
+const discoveries=new Set();
+try{for(const i of JSON.parse(localStorage.getItem('aurora-survey-v4')||'[]'))if(Number.isInteger(i)&&i>=0&&i<6)discoveries.add(i);}catch{}
 for(const d of doors){const op=document.createElement('option');op.value=String(d.id);op.textContent=d.label;$('destination').append(op);}
-$('visit').onclick=()=>{if(journey.mode!=='walking'||journey.world!=='city')return;const d=doors[Number($('destination').value)];if(!d)return;camera.position.set(d.front-d.side*2.8,1.89,-d.doorY);yaw=-d.side*Math.PI/2;pitch=0;};
+$('visit').onclick=()=>{if(journey.mode!=='walking'||journey.world!=='city')return;metroRiding=false;upper=null;liftRide=null;const d=doors[Number($('destination').value)];if(!d)return;camera.position.set(d.front-d.side*2.8,1.89,-d.doorY);yaw=-d.side*Math.PI/2;pitch=0;};
 const people=[],clock=new THREE.Clock(),avatarClip=new THREE.Plane(new THREE.Vector3(0,-1,0),1.4);let avatar=null,avatarMixer=null,walkClip=null;
 function recolor(root,i){root.traverse(o=>{if(o.isMesh){o.castShadow=true;o.frustumCulled=false;if(i%4){o.material=o.material.clone();o.material.color.multiply(new THREE.Color([.8,.9,1,.9][i%4],[.85,.88,.9,1][i%4],[.9,.8,.85,.92][i%4]));}}});}
 const parseGLB=buffer=>new Promise((resolve,reject)=>new GLTFLoader().parse(buffer,'',resolve,reject));
@@ -83,8 +90,9 @@ Promise.all([parseGLB(bytes(assets.human).buffer),parseGLB(bytes(assets.civilian
   walkClip=gltf.animations.find(a=>/walk/i.test(a.name));
   const soldierForward=forwardFromFeet(original,THREE.Vector3),civilianForward=forwardFromFeet(civilian.scene,THREE.Vector3);
   forwardAxes.push(soldierForward,civilianForward);
-  for(let i=0;i<data.crowd.length;i++){
-    const cfg=data.crowd[i],civil=i%2===1,template=civil?civilian.scene:original;
+  const crowd=[...data.crowd,...Array.from({length:24},(_,i)=>({x:[-225,-165,135,225][i%4],y:-90+i*13,dir:i%2?1:-1,speed:1.1,scale:1,min:-285,max:120}))];
+  for(let i=0;i<crowd.length;i++){
+    const cfg=crowd[i],civil=i%2===1,template=civil?civilian.scene:original;
     const cb=new THREE.Box3().setFromObject(template),cs=1.74/(cb.max.y-cb.min.y);
     const sourceForward=civil?civilianForward:soldierForward;
     const ob=clone(template);ob.scale.multiplyScalar(cs*cfg.scale);ob.position.set(cfg.x,.17-cb.min.y*cs*cfg.scale,-cfg.y);ob.rotation.y=headingForMotion(0,-cfg.dir,sourceForward.x,sourceForward.z);
@@ -100,6 +108,8 @@ Promise.all([parseGLB(bytes(assets.human).buffer),parseGLB(bytes(assets.civilian
 }).catch(e=>{$('loading').textContent='人物の読み込みに失敗しました。再度開いてください。';console.error(e);});
 
 function blocked(x,z){
+  if(upper)return expansion.blocked(x,z,upper);
+  if(journey.world==='city'&&expansion.blocked(x,z,null))return true;
   const local=galaxy.train.worldToLocal(new THREE.Vector3(x,0,z));
   if(galaxy.train.position.y<3&&Math.abs(local.x)<2.55&&local.z> -8.5&&local.z<32)return true;
   if(journey.world==='planet')return galaxy.blockedPlanet(x,z);
@@ -107,14 +117,31 @@ function blocked(x,z){
   return blockedAt(x,z,data.colliders,doors,cars);
 }
 function move(dx,dz){
-  if(!blocked(camera.position.x+dx,camera.position.z))camera.position.x+=dx;
-  if(!blocked(camera.position.x,camera.position.z+dz))camera.position.z+=dz;
+  const count=Math.max(1,Math.ceil(Math.max(Math.abs(dx),Math.abs(dz))/.12));
+  for(let i=0;i<count;i++){if(!blocked(camera.position.x+dx/count,camera.position.z))camera.position.x+=dx/count;if(!blocked(camera.position.x,camera.position.z+dz/count))camera.position.z+=dz/count;}
 }
-function start(){active=true;$('pause').classList.add('hidden');renderer.domElement.requestPointerLock?.()?.catch?.(()=>{});}
+function start(){active=true;document.querySelector('details').open=false;$('pause').classList.add('hidden');renderer.domElement.requestPointerLock?.()?.catch?.(()=>{});}
 function pause(){active=false;keys.clear();document.exitPointerLock?.();$('pause').classList.remove('hidden');$('start').classList.add('hidden');$('resume').classList.remove('hidden');}
-function resetJourney(){Object.assign(journey,createJourney());galaxy.setTrain(0);camera.position.fromArray(data.spawn);yaw=-.13;pitch=.055;keys.clear();}
-function goToStation(){if(journey.mode!=='walking')return;const stop=journey.world==='city'?CITY_STOP:PLANET_STOP;camera.position.fromArray(stop.exit);yaw=Math.PI/2;pitch=0;start();}
+function resetJourney(){metroRiding=false;upper=null;liftRide=null;roverDriving=false;$('liftpanel').classList.add('hidden');Object.assign(journey,createJourney());galaxy.setTrain(0);camera.position.fromArray(data.spawn);yaw=-.13;pitch=.055;keys.clear();}
+function goToStation(){if(journey.mode!=='walking')return;metroRiding=false;upper=null;liftRide=null;roverDriving=false;const stop=journey.world==='city'?CITY_STOP:PLANET_STOP;camera.position.fromArray(stop.exit);yaw=Math.PI/2;pitch=0;start();}
+function closestLift(){return journey.world==='city'&&!metroRiding&&!liftRide?expansion.lifts.findIndex((l,i)=>(!upper||upper.room===i)&&Math.hypot(camera.position.x-l.x,camera.position.z-l.z)<3):-1;}
+function specialAction(){
+ if(journey.mode!=='walking')return false;
+ if(metroRiding){const p=expansion.metroPose(metroTime);if(p.dwell){metroRiding=false;metroIndex=p.index;camera.position.set(METRO_STOPS[p.index].x,16.52,-52);yaw=Math.PI;pitch=0;}return true;}
+ if(roverDriving){roverDriving=false;camera.position.x+=3;return true;}
+ if(journey.world==='city'&&!upper&&!liftRide){const si=METRO_STOPS.findIndex(s=>Math.hypot(camera.position.x-(s.x+13),camera.position.z+49)<3);if(si>=0){metroIndex=si;camera.position.set(METRO_STOPS[si].x+13,camera.position.y>10?1.72:16.52,-49);return true;}}
+ if(journey.world==='planet'){
+  const index=expansion.beacons.findIndex((b,i)=>!discoveries.has(i)&&Math.hypot(camera.position.x-b.x,camera.position.z-b.z)<4);
+  if(index>=0){discoveries.add(index);try{localStorage.setItem('aurora-survey-v4',JSON.stringify([...discoveries]));}catch{}$('discovery').textContent=`${expansion.beacons[index].title}を記録！ ${discoveries.size}/6`;$('discovery').classList.remove('hidden');return true;}
+  if(camera.position.distanceTo(expansion.rover.position)<6){roverDriving=true;return true;}
+  if(Math.hypot(camera.position.x-expansion.orrery.position.x,camera.position.z-expansion.orrery.position.z)<8){$('discovery').textContent=discoveries.size===6?'探査完了！古代の星図が復元されました。惑星儀が共鳴しています。':'惑星儀：6つの探査ビーコンを調べ、古代の星図を復元しよう。';$('discovery').classList.remove('hidden');return true;}
+ }
+ const li=closestLift();if(li>=0){liftChoice=li;pause();$('liftpanel').classList.remove('hidden');return true;}
+ if(journey.world==='city'&&!upper&&Math.abs(camera.position.z+52)<3&&Math.abs(camera.position.x-METRO_STOPS[metroIndex].x)<18&&camera.position.y>12){const p=expansion.metroPose(metroTime);if(p.dwell&&p.index===metroIndex){metroRiding=true;yaw=0;pitch=0;}return true;}
+ return false;
+}
 function interact(){
+ if(specialAction()){keys.clear();return;}
  if(!$('start').disabled&&journey.mode==='arrived'){
   leaveJourney(journey);const stop=journey.world==='city'?CITY_STOP:PLANET_STOP;camera.position.fromArray(stop.exit);yaw=-Math.PI/2;pitch=0;keys.clear();start();
  }else if(!$('start').disabled&&journey.mode==='walking'&&nearStation(journey,camera.position.x,camera.position.z)){
@@ -122,6 +149,12 @@ function interact(){
  }
 }
 $('station').onclick=goToStation;$('interact').onclick=interact;
+$('skip').onclick=()=>{if(journey.mode==='riding'){advanceJourney(journey,JOURNEY_SECONDS);galaxy.setTrain(journey.progress,journey.origin==='planet');}};
+for(const [i,s] of METRO_STOPS.entries()){const op=document.createElement('option');op.value=i;op.textContent=s.name;$('metro-destination').append(op);}
+$('metro').onclick=()=>{if(journey.mode!=='walking')return;resetJourney();metroIndex=Number($('metro-destination').value);camera.position.set(METRO_STOPS[metroIndex].x,16.52,-52);metroTime=metroIndex*30;start();};
+for(const [i,name] of ['1F ロビー','展望ラウンジ','屋上庭園'].entries()){$('floor'+i).onclick=()=>{if(liftChoice===null)return;const l=expansion.lifts[liftChoice],from=upper?l.levels[upper.level]:.17;liftRide={room:liftChoice,level:i,from,to:l.levels[i],time:0};upper={room:liftChoice,level:i};camera.position.x=l.x;camera.position.z=l.z;$('liftpanel').classList.add('hidden');start();};}
+$('lift-close').onclick=()=>{$('liftpanel').classList.add('hidden');start();};
+$('discovery').onclick=()=>$('discovery').classList.add('hidden');
 $('start').onclick=start;
 $('resume').onclick=start;
 $('reset').onclick=resetJourney;
@@ -134,14 +167,14 @@ addEventListener('mousemove',e=>{if(active&&(document.pointerLockElement||draggi
 addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);});
 let steps=0,elapsed=0;
 renderer.setAnimationLoop(()=>{
-  const realDt=Math.min(clock.getDelta(),.25),dt=Math.min(realDt,.05);elapsed+=dt;
+  const realDt=Math.min(clock.getDelta(),.25),dt=realDt;elapsed+=dt;
   let forward=0,side=0,moving=false;
   if(active){
     yaw+=((keys.has('KeyQ')?1:0)-(keys.has('KeyE')?1:0))*dt*1.35;
-    if(journey.mode==='walking'){
+    if(journey.mode==='walking'&&!metroRiding&&!liftRide){
     forward=(keys.has('KeyW')||keys.has('ArrowUp')?1:0)-(keys.has('KeyS')||keys.has('ArrowDown')?1:0);
     side=(keys.has('KeyD')||keys.has('ArrowRight')?1:0)-(keys.has('KeyA')||keys.has('ArrowLeft')?1:0);
-    moving=!!(forward||side);const norm=Math.hypot(forward,side)||1,speed=keys.has('ShiftLeft')?3.8:1.45;
+    moving=!!(forward||side);const norm=Math.hypot(forward,side)||1,speed=roverDriving?9:keys.has('ShiftLeft')?3.8:1.45;
     move((side*Math.cos(yaw)-forward*Math.sin(yaw))*dt*speed/norm,(-forward*Math.cos(yaw)-side*Math.sin(yaw))*dt*speed/norm);
     if(moving)steps+=dt*speed*4.5;
     }
@@ -152,21 +185,26 @@ renderer.setAnimationLoop(()=>{
   const room=journey.world==='city'&&!riding?roomAt(doors,camera.position.x,camera.position.z):null;
   const sidewalk=Math.abs(camera.position.x)>12&&Math.abs(camera.position.x)<21;
   const atCityStation=journey.world==='city'&&Math.abs(camera.position.x+82)<4&&Math.abs(camera.position.z)<20;
-  const floor=journey.world==='planet'?galaxy.floorHeight(camera.position.x,camera.position.z):atCityStation?.32:(room||sidewalk)?.17:0;
+  if(active||!metroRiding)metroTime+=realDt;const metroPose=expansion.metroPose(metroTime);train.position.x=metroPose.x;
+  const onPlatform=!upper&&journey.world==='city'&&camera.position.y>10&&Math.abs(camera.position.z+52)<3.5&&METRO_STOPS.some(s=>Math.abs(camera.position.x-s.x)<16);
+  let floor=upper?expansion.lifts[upper.room].levels[upper.level]:journey.world==='planet'?galaxy.floorHeight(camera.position.x,camera.position.z):onPlatform?14.8:atCityStation?.32:(room||sidewalk)?.17:0;
+  if(liftRide){if(active)liftRide.time+=realDt;const l=expansion.lifts[liftRide.room];floor=expansion.liftHeight(liftRide.from,liftRide.to,liftRide.time);l.cabin.position.y=floor;if(liftRide.time>=5){if(liftRide.level===0)upper=null;liftRide=null;}}
   if(riding){
     ridePosition.set(1.1,2.3,13.3);galaxy.train.localToWorld(ridePosition);camera.position.copy(ridePosition);
     rideRotation.setFromEuler(new THREE.Euler(pitch,yaw,0,'YXZ'));camera.quaternion.copy(galaxy.train.quaternion).multiply(rideRotation);
-  }else{camera.position.y=1.72+floor+(moving?Math.sin(steps)*.018:0);camera.rotation.set(pitch,yaw,0,'YXZ');}
-  for(const p of people){p.mix.update(dt);p.ob.position.z-=dt*p.cfg.speed*p.cfg.dir;if(p.ob.position.z< -117)p.ob.position.z=49;if(p.ob.position.z>49)p.ob.position.z=-117;}
+  }else if(metroRiding){camera.position.set(metroPose.x,16.6,-58);camera.rotation.set(pitch,yaw,0,'YXZ');}
+  else{camera.position.y=1.72+floor+(roverDriving?.9:0)+(moving?Math.sin(steps)*.018:0);camera.rotation.set(pitch,yaw,0,'YXZ');}
+  if(roverDriving){expansion.rover.position.set(camera.position.x,floor,camera.position.z);expansion.rover.rotation.y=yaw;}
+  expansion.orrery.rotation.y+=dt*(discoveries.size===6?1:.2);for(const [i,b] of expansion.beacons.entries()){b.jewel.rotation.y+=dt;b.jewel.material.color.set(discoveries.has(i)?0xc5a45c:0x83e7d3);}
+  for(const p of people){p.ob.visible=journey.world==='city'&&!riding&&Math.hypot(p.ob.position.x-camera.position.x,p.ob.position.z-camera.position.z)<125;if(p.ob.visible)p.mix.update(dt);p.ob.position.z-=dt*p.cfg.speed*p.cfg.dir;const min=p.cfg.min??-117,max=p.cfg.max??49;if(p.ob.position.z<min)p.ob.position.z=max;if(p.ob.position.z>max)p.ob.position.z=min;}
   stepTraffic(cars,dt,elapsed,data.trafficSignals||[],camera.position);
   for(const c of cars){c.ob.position.set(c.x,0,c.z);for(const wheel of c.wheels)if(wheel)wheel.rotation.x=-c.wheel;for(const m of c.brakes)m.emissiveIntensity=c.speed<.5?2.5:.6;}
   stepDoors(doors,camera.position,dt);for(const d of doors)for(const l of d.leaves)l.group.position.z=-d.doorY+l.sign*(.86+d.open*1.65);
   const phase=signalPhase(elapsed);for(const b of bulbs){b.m.color.set(b.color===phase?({red:0xe33425,amber:0xffba35,green:0x36e4a2}[b.color]):0x101819);b.m.emissive.copy(b.m.color);b.m.emissiveIntensity=b.color===phase?2.2:0;}
-  train.position.x=(elapsed*6+70)%174-87;
-  if(avatar){avatarClip.constant=camera.position.y-.35;avatar.position.set(camera.position.x,floor,camera.position.z);const f=forwardAxes[0];avatar.rotation.y=headingForMotion(-Math.sin(yaw),-Math.cos(yaw),f.x,f.z);if(avatarMixer)avatarMixer.update(moving?dt:0);avatar.visible=active&&!riding;}
-  const space=journey.world==='planet'&&!riding?1:Math.max(0,Math.min(1,Math.max((camera.position.y-45)/220,(journey.progress-.75)/.12)));
+  if(avatar){avatarClip.constant=camera.position.y-.35;avatar.position.set(camera.position.x,floor,camera.position.z);const f=forwardAxes[0];avatar.rotation.y=headingForMotion(-Math.sin(yaw),-Math.cos(yaw),f.x,f.z);if(avatarMixer)avatarMixer.update(moving?dt:0);avatar.visible=active&&!riding&&!metroRiding&&!liftRide&&!roverDriving;}
+  const space=journey.world==='planet'&&!riding?1:riding?Math.max(0,Math.min(1,Math.max((camera.position.y-45)/220,(journey.progress-.75)/.12))):0;
   scene.background=space>.5?new THREE.Color(0x020611):env;
-  scene.fog.density=.003*(1-space)+.000008*space;scene.fog.color.set(night?0x14212c:0xa8b4bb).lerp(new THREE.Color(0x030817),space);
+  scene.fog.density=.0015*(1-space)+.000008*space;scene.fog.color.set(night?0x14212c:0xa8b4bb).lerp(new THREE.Color(0x030817),space);
   scene.backgroundIntensity=night?.07:.75;scene.environmentIntensity=(night?.2:.7)*(1-space)+.5*space;
   sun.intensity=(night?.1:2.8)*(1-space)+3.1*space;hemisphere.intensity=(night?.42:1.7)*(1-space)+.9*space;
   galaxy.stars.material.opacity=space;
@@ -186,8 +224,29 @@ renderer.setAnimationLoop(()=>{
   $('route-from').textContent=journey.origin==='city'?'AURORA':'LUMEN';$('route-to').textContent=journey.destination==='city'?'AURORA':'LUMEN';
   $('phase').textContent=journeyPhase(journey);$('progress').value=journey.time/JOURNEY_SECONDS;
   $('remaining').textContent=journey.mode==='arrived'?'降車できます':`あと ${Math.ceil(JOURNEY_SECONDS-journey.time)} 秒${active?'':' / 休憩中'}`;
+  $('skip').classList.toggle('hidden',journey.mode!=='riding');
   $('place').textContent=riding?'GALAXY RAILWAY / 車窓を見回せます':journey.world==='planet'?'LUMEN / 結晶盆地・観測基地':room?`${room.label} / 館内`:`AURORA / 入れる建物 ${doors.length}棟`;
   $('region').textContent=riding?'GALAXY RAILWAY':journey.world==='planet'?'LUMEN / CRYSTAL BASIN':'AURORA / STREET LIFE';
+  let action='';
+  if(!riding){
+   if(metroRiding){action=metroPose.dwell?'F 市内電車を降りる':'';$('place').textContent=`市内電車 / 次は ${METRO_STOPS[metroPose.next].name}${metroPose.dwell?'（停車中）':''}`;}
+   else if(liftRide){$('place').textContent=`エレベーター移動中 / ${Math.round(floor)} m`;}
+   else if(closestLift()>=0)action='F エレベーター・階を選ぶ';
+   else if(onPlatform){action=metroPose.dwell&&metroPose.index===metroIndex?'F 市内電車に乗車':'';$('place').textContent=`${METRO_STOPS[metroIndex].name}駅 / ${metroPose.dwell&&metroPose.index===metroIndex?'電車が停車中':'次の電車をお待ちください'}`;}
+   if(!metroRiding&&!upper&&journey.world==='city'&&METRO_STOPS.some(s=>Math.hypot(camera.position.x-(s.x+13),camera.position.z+49)<3))action=camera.position.y>10?'F 駅の地上へ降りる':'F 駅のホームへ上がる';
+   if(journey.world==='planet'){
+    if(roverDriving)action='F ローバーから降りる';
+    else if(expansion.beacons.some((b,i)=>!discoveries.has(i)&&Math.hypot(camera.position.x-b.x,camera.position.z-b.z)<4))action='F 探査データを記録';
+    else if(camera.position.distanceTo(expansion.rover.position)<6)action='F ローバーを運転';
+    else if(Math.hypot(camera.position.x-expansion.orrery.position.x,camera.position.z-expansion.orrery.position.z)<8)action='F 惑星儀を調べる';
+    const todo=expansion.beacons.filter((_,i)=>!discoveries.has(i)).sort((a,b)=>Math.hypot(a.x-camera.position.x,a.z-camera.position.z)-Math.hypot(b.x-camera.position.x,b.z-camera.position.z));
+    $('mission').textContent=`惑星探査 ${discoveries.size}/6${todo[0]?` · 次の標本まで ${Math.round(Math.hypot(todo[0].x-camera.position.x,todo[0].z-camera.position.z))}m`:' · 星図復元！惑星儀へ'}${roverDriving?' · ローバー運転中':''}`;
+   }
+   if(upper)$('place').textContent=`${expansion.lifts[upper.room].room.label} / ${upper.level===1?'展望ラウンジ':'屋上庭園'}`;
+  }
+  $('mission').classList.toggle('hidden',journey.world!=='planet'||riding);
+  if(action){$('interact').textContent=action;$('interact').classList.remove('hidden');}else if(metroRiding||liftRide||onPlatform)$('interact').classList.add('hidden');
+  document.documentElement.dataset.expansion=JSON.stringify({metroRiding,metroTime,upper,liftRide:!!liftRide,roverDriving,discoveries:[...discoveries],buildings:expansion.buildings.length});
   document.documentElement.dataset.journey=JSON.stringify({...journey,position:camera.position.toArray().map(v=>+v.toFixed(2))});
   document.documentElement.dataset.facing=JSON.stringify(people.map(p=>{const f=p.sourceForward,a=p.ob.rotation.y;return +(Math.sin(a)*f.z+Math.cos(a)*f.x).toFixed(3)+','+(-Math.sin(a)*f.x+Math.cos(a)*f.z).toFixed(3);}));
   renderer.render(scene,camera);
