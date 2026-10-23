@@ -29,7 +29,3 @@ AIとBlenderで制作した未来都市「AURORA」の3Dデータと、街を歩
 - 路面、コンクリート、空： [Poly Haven](https://polyhaven.com/license)、CC0。`asphalt_02` / `concrete_wall_003` / `kloppenheim_06_puresky`。
 - 人物： [Three.js公式サンプル](https://threejs.org/examples/webgl_animation_skinning_blending.html) のSoldierとMichelle、原モデル・動作はMixamo。Michelleの歩行は骨格に合わせて移植しています。人物モデルの単体素材としての再配布には使用元の条件を確認してください。
 - 散策用ライブラリ：Three.js、MIT。`walk/THREE-LICENSE.txt` を参照。
-
-## 個人情報への配慮
-
-PC固有の絶対パスを除去したデータだけを収録しています。制作ログ、作業フォルダー、認証情報、ローカル設定、チャット履歴は含めていません。
