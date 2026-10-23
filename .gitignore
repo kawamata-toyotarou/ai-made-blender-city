@@ -1,0 +1,9 @@
+*.blend1
+*.blend2
+*.log
+.env
+.env.*
+node_modules/
+work/
+.DS_Store
+Thumbs.db
