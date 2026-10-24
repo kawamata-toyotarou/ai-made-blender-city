@@ -24,6 +24,8 @@ export function createExpansion(scene,rooms,roofHeights,train){
  }
  const towers=new T.InstancedMesh(new T.BoxGeometry(1,1,1),white,buildings.length),windows=new T.InstancedMesh(new T.BoxGeometry(1,1,1),new T.MeshStandardMaterial({color:0x36596b,metalness:.45,roughness:.24,emissive:0x244c54,emissiveIntensity:.3}),buildings.reduce((n,b)=>n+Math.floor(b.h/3)*4,0));
  const d=new T.Object3D();let k=0;buildings.forEach((b,i)=>{d.position.set(b.x,b.h/2,b.z);d.rotation.set(0,0,0);d.scale.set(b.w,b.h,b.d);d.updateMatrix();towers.setMatrixAt(i,d.matrix);towers.setColorAt(i,new T.Color().setHSL(.52+(i%4)*.015,.1,.32+(i%3)*.08));for(let y=3;y<b.h;y+=3)for(const side of [-1,1])for(const axis of [0,1]){d.position.set(b.x+(axis?0:side*11.04),y,b.z+(axis?side*12.54:0));d.scale.set(axis?20:.05,1.65,axis?.05:23);d.updateMatrix();windows.setMatrixAt(k++,d.matrix);}});windows.count=k;root.add(towers,windows);
+ const facade=document.createElement('canvas');facade.width=256;facade.height=64;const fc=facade.getContext('2d');fc.fillStyle='#142d3b';fc.fillRect(0,0,256,64);for(let i=0;i<8;i++){fc.fillStyle=i%5===1?'#b9a879':i%3===0?'#45677b':'#264653';fc.fillRect(i*32+3,4,26,54);fc.fillStyle='#182f3a';fc.fillRect(i*32+3,40,26,3);}const ft=new T.CanvasTexture(facade);ft.colorSpace=T.SRGBColorSpace;windows.material.map=ft;windows.material.emissiveMap=ft;windows.material.emissive.set(0xffffff);windows.material.emissiveIntensity=.15;
+
  for(const x of [-285,-210,150,285])for(let z=-290;z<140;z+=30){plant(x+10,0,z);box([2,.5,.8],[x+10,.4,z+5],wood);}
  box([45,.08,42],[180,.03,105],green);for(let i=0;i<9;i++)plant(164+i%3*14,0,90+Math.floor(i/3)*14);
  sign('GARDEN DISTRICT',[180,3,125],12);
