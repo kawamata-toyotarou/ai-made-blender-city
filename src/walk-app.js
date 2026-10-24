@@ -6,6 +6,9 @@ import {createTraffic,stepTraffic,signalPhase,stepDoors,blockedAt,roomAt} from '
 import {createGalaxy} from './galaxy-world.js';
 import {createExpansion} from './expansion-world.js';
 import {createDistricts} from './district-world.js';
+import {createSandbox} from './sandbox-world.js';
+import {windTime} from './greenery.js';
+import {PROP_TYPES,MAX_PROPS,BOAT_DOCK,boatBlocked,stepBoat} from './sandbox.mjs';
 import {districtAt,droneHeight,validStamps} from './freedom.mjs';
 import {METRO_STOPS} from './expansion.mjs';
 import {PLANET,CITY_STOP,PLANET_STOP,JOURNEY_SECONDS,createJourney,boardJourney,advanceJourney,leaveJourney,nearStation,journeyPhase,forwardFromFeet,headingForMotion} from './journey.mjs';
@@ -78,13 +81,14 @@ const trainBody=new THREE.MeshStandardMaterial({color:0xa5b8bc,metalness:.65,rou
 for(let i=-1;i<=1;i++){boxMesh([7.4,2.2,2.8],[i*8,0,0],trainBody,train);boxMesh([6.6,.85,.04],[i*8,.2,1.42],trainGlass,train);boxMesh([6.5,.055,.045],[i*8,-.65,1.45],new THREE.MeshStandardMaterial({color:0x45c5da,emissive:0x45c5da,emissiveIntensity:1.5}),train);}
 const expansion=createExpansion(scene,doors,roofHeights,train);
 const districts=createDistricts(scene,expansion.buildings);
-let freeMode='foot',flightReturn=null,flightY=15,weather='clear';
+const sandbox=createSandbox(scene);
+let freeMode='foot',flightReturn=null,flightY=15,weather='clear',editorOpen=false,propRotation=0,propCandidate=null;
 let stamps=validStamps([]);try{stamps=validStamps(JSON.parse(localStorage.getItem('aurora-city-stamps')||'[]'));}catch{}
 let metroRiding=false,metroTime=0,metroIndex=1,upper=null,liftRide=null,roverDriving=false,liftChoice=null;
 const discoveries=new Set();
 try{for(const i of JSON.parse(localStorage.getItem('aurora-survey-v4')||'[]'))if(Number.isInteger(i)&&i>=0&&i<6)discoveries.add(i);}catch{}
 for(const d of doors){const op=document.createElement('option');op.value=String(d.id);op.textContent=d.label;$('destination').append(op);}
-$('visit').onclick=()=>{if(journey.mode!=='walking'||journey.world!=='city')return;freeMode='foot';metroRiding=false;upper=null;liftRide=null;const d=doors[Number($('destination').value)];if(!d)return;camera.position.set(d.front-d.side*2.8,1.89,-d.doorY);yaw=-d.side*Math.PI/2;pitch=0;};
+$('visit').onclick=()=>{if(journey.mode!=='walking'||journey.world!=='city')return;closeEditor();freeMode='foot';metroRiding=false;upper=null;liftRide=null;const d=doors[Number($('destination').value)];if(!d)return;camera.position.set(d.front-d.side*2.8,1.89,-d.doorY);yaw=-d.side*Math.PI/2;pitch=0;};
 const people=[],clock=new THREE.Clock(),avatarClip=new THREE.Plane(new THREE.Vector3(0,-1,0),1.4);let avatar=null,avatarMixer=null,walkClip=null;
 function recolor(root,i){root.traverse(o=>{if(o.isMesh){o.castShadow=true;o.frustumCulled=false;if(i%4){o.material=o.material.clone();o.material.color.multiply(new THREE.Color([.8,.9,1,.9][i%4],[.85,.88,.9,1][i%4],[.9,.8,.85,.92][i%4]));}}});}
 const parseGLB=buffer=>new Promise((resolve,reject)=>new GLTFLoader().parse(buffer,'',resolve,reject));
@@ -116,9 +120,11 @@ Promise.all([parseGLB(bytes(assets.human).buffer),parseGLB(bytes(assets.civilian
   document.documentElement.dataset.people=people.length;document.documentElement.dataset.triangles=triangles;
 }).catch(e=>{$('loading').textContent='人物の読み込みに失敗しました。再度開いてください。';console.error(e);});
 
-function blocked(x,z){
+function blocked(x,z,ignoreGarden=false){
   if(freeMode==='drone')return x< -310||x>310||z< -310||z>155;
+  if(freeMode==='boat')return boatBlocked(x,z);
   if(upper)return expansion.blocked(x,z,upper);
+  if(!ignoreGarden&&journey.world==='city'&&sandbox.blocked(x,z))return true;
   if(journey.world==='city'&&districts.blocked(x,z))return true;
   if(journey.world==='city'&&expansion.blocked(x,z,null))return true;
   const local=galaxy.train.worldToLocal(new THREE.Vector3(x,0,z));
@@ -134,31 +140,46 @@ function move(dx,dz){
 }
 function start(){active=true;document.querySelector('details').open=false;$('pause').classList.add('hidden');renderer.domElement.requestPointerLock?.()?.catch?.(()=>{});}
 function pause(){active=false;keys.clear();document.exitPointerLock?.();$('pause').classList.remove('hidden');$('start').classList.add('hidden');$('resume').classList.remove('hidden');}
-function resetJourney(){freeMode='foot';flightReturn=null;metroRiding=false;upper=null;liftRide=null;roverDriving=false;$('liftpanel').classList.add('hidden');Object.assign(journey,createJourney());galaxy.setTrain(0);camera.position.fromArray(data.spawn);yaw=-.13;pitch=.055;keys.clear();}
-function goToStation(){if(journey.mode!=='walking')return;freeMode='foot';metroRiding=false;upper=null;liftRide=null;roverDriving=false;const stop=journey.world==='city'?CITY_STOP:PLANET_STOP;camera.position.fromArray(stop.exit);yaw=Math.PI/2;pitch=0;start();}
+function resetJourney(){closeEditor();freeMode='foot';flightReturn=null;metroRiding=false;upper=null;liftRide=null;roverDriving=false;$('liftpanel').classList.add('hidden');Object.assign(journey,createJourney());galaxy.setTrain(0);camera.position.fromArray(data.spawn);yaw=-.13;pitch=.055;keys.clear();}
+function goToStation(){if(journey.mode!=='walking')return;closeEditor();freeMode='foot';metroRiding=false;upper=null;liftRide=null;roverDriving=false;const stop=journey.world==='city'?CITY_STOP:PLANET_STOP;camera.position.fromArray(stop.exit);yaw=Math.PI/2;pitch=0;start();}
 function canRoam(){return !$('start').disabled&&journey.world==='city'&&journey.mode==='walking'&&!metroRiding&&!liftRide&&!upper&&!roverDriving;}
-function nearActivity(){return canRoam()?districts.actions.filter(a=>Math.hypot(camera.position.x-a.x,camera.position.z-a.z)<2.7).sort((a,b)=>Math.hypot(camera.position.x-a.x,camera.position.z-a.z)-Math.hypot(camera.position.x-b.x,camera.position.z-b.z))[0]:null;}
+function nearActivity(){return canRoam()?[...districts.actions,...sandbox.actions].filter(a=>Math.hypot(camera.position.x-a.x,camera.position.z-a.z)<2.7).sort((a,b)=>Math.hypot(camera.position.x-a.x,camera.position.z-a.z)-Math.hypot(camera.position.x-b.x,camera.position.z-b.z))[0]:null;}
 function notify(message){$('activity').textContent=message;$('activity').classList.remove('hidden');}
+function closeEditor(){editorOpen=false;$('editor').classList.add('hidden');sandbox.preview(null,false,blocked);}
+function canBuild(){return canRoam()&&freeMode==='foot'&&camera.position.y<4;}
+function toggleEditor(){if(editorOpen){closeEditor();start();return;}if(!canBuild()){notify('街の地上で乗り物から降りて、編集モードを開いてください。');return;}editorOpen=true;document.querySelector('details').open=false;$('pause').classList.add('hidden');$('editor').classList.remove('hidden');$('activity').classList.add('hidden');active=true;document.exitPointerLock?.();keys.clear();}
+for(const p of PROP_TYPES){const o=document.createElement('option');o.value=p.id;o.textContent=p.name;$('prop-type').append(o);}
+$('build').onclick=toggleEditor;$('build-close').onclick=()=>{closeEditor();start();};
+$('prop-rotate').onclick=()=>{propRotation+=Math.PI/4;};
+$('prop-place').onclick=()=>{if(!editorOpen||!canBuild())return;propCandidate=sandbox.candidate(camera,yaw,$('prop-type').value,propRotation);notify(sandbox.place(propCandidate,blocked).message);};
+$('prop-remove').onclick=()=>{if(editorOpen&&canBuild())notify(sandbox.remove(camera.position.x,camera.position.z));};
+$('prop-undo').onclick=()=>{if(editorOpen&&canBuild())notify(sandbox.restore());};
+$('garden-save').onclick=()=>{const blob=new Blob([JSON.stringify({version:1,props:sandbox.items},null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='AURORA-my-garden.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),10000);notify('自分の配置をJSONファイルに保存しました。');};
+$('garden-open').onclick=()=>{if(editorOpen&&canBuild())$('garden-file').click();};
+$('garden-file').onchange=async()=>{const f=$('garden-file').files[0];if(!f)return;try{if(f.size>100000)throw Error();const value=JSON.parse(await f.text());if(value.version!==1||!Array.isArray(value.props))throw Error();if(!editorOpen||!canBuild())return;notify(sandbox.load(value.props,(x,z)=>blocked(x,z,true)));}catch{notify('AURORAで保存した配置JSONを選んでください。');}finally{$('garden-file').value='';}};
 function toggleDrone(){
  if(freeMode==='drone'){freeMode='foot';camera.position.copy(flightReturn);flightReturn=null;keys.clear();return;}
  if(!canRoam()||freeMode!=='foot'){notify('地上で乗り物から降りてから、ドローンを起動してください。');return;}
- flightReturn=camera.position.clone();flightY=Math.max(8,camera.position.y+8);freeMode='drone';pitch=-.25;start();
+ closeEditor();flightReturn=camera.position.clone();flightY=Math.max(8,camera.position.y+8);freeMode='drone';pitch=-.25;start();
 }
 $('drone').onclick=toggleDrone;$('activity').onclick=()=>$('activity').classList.add('hidden');
 $('weather').onchange=()=>{weather=$('weather').value;};
-$('quality').onchange=()=>{const q=$('quality').value;renderer.setPixelRatio(Math.min(devicePixelRatio,q==='low'?.8:q==='high'?1.5:1.1));renderer.shadowMap.enabled=q!=='low';renderer.setSize(innerWidth,innerHeight);};
+$('quality').onchange=()=>{const q=$('quality').value;renderer.setPixelRatio(Math.min(devicePixelRatio,q==='low'?.8:q==='high'?1.5:1.1));renderer.shadowMap.enabled=q!=='low';sun.shadow.mapSize.set(q==='high'?4096:2048,q==='high'?4096:2048);if(sun.shadow.map){sun.shadow.map.dispose();sun.shadow.map=null;}renderer.setSize(innerWidth,innerHeight);};
 for(const p of districts.places){const o=document.createElement('option');o.value=p.id;o.textContent=p.name;$('district').append(o);}
 $('explore').onclick=()=>{if(journey.mode!=='walking')return;resetJourney();const p=districts.places.find(p=>p.id===$('district').value);camera.position.set(p.x,1.72,p.z);yaw=p.yaw;pitch=0;start();};
 $('photo').onclick=()=>{renderer.render(scene,camera);renderer.domElement.toBlob(blob=>{if(!blob){notify('写真を保存できませんでした。');return;}const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='AURORA-photo.png';a.click();setTimeout(()=>URL.revokeObjectURL(url),10000);notify('風景の写真をPNGで保存しました。');},'image/png');};
 function closestLift(){return journey.world==='city'&&!metroRiding&&!liftRide?expansion.lifts.findIndex((l,i)=>(!upper||upper.room===i)&&Math.hypot(camera.position.x-l.x,camera.position.z-l.z)<3):-1;}
 function specialAction(){
  if(journey.mode!=='walking')return false;
+ if(editorOpen)return true;
+ if(freeMode==='boat'){freeMode='foot';camera.position.fromArray(BOAT_DOCK.exit);yaw=-Math.PI/2;pitch=0;notify('船着き場へ戻りました。ボートは現在の場所に停泊しています。');return true;}
  if(freeMode==='drone'){toggleDrone();return true;}
  if(freeMode==='car'){const exit=[[2.6,0],[-2.6,0],[0,3],[0,-3]].find(([x,z])=>!blocked(camera.position.x+x,camera.position.z+z));if(!exit){notify('周囲が狭いため、広い場所へ移動してから降車してください。');return true;}freeMode='foot';camera.position.x+=exit[0];camera.position.z+=exit[1];return true;}
  if(freeMode==='seat'){const a=flightReturn;freeMode='foot';camera.position.fromArray(a);flightReturn=null;return true;}
  if(canRoam()){
+  if(Math.hypot(camera.position.x-BOAT_DOCK.exit[0],camera.position.z-BOAT_DOCK.exit[2])<4){freeMode='boat';camera.position.copy(sandbox.boat.position);yaw=sandbox.boat.rotation.y;pitch=.05;notify('運河ボート：W/Sで前後、A/Dで操舵。Fで船着き場へ戻ります。橋の間の水域を航行できます。');return true;}
   if(Math.hypot(camera.position.x-districts.car.position.x,camera.position.z-districts.car.position.z)<4){freeMode='car';camera.position.x=districts.car.position.x;camera.position.z=districts.car.position.z;yaw=districts.car.rotation.y;notify('シティカー：W/Sで前後、A/Dでハンドル、Fで降車。');return true;}
-  const a=nearActivity();if(a){if(a.kind==='seat'){flightReturn=a.exit;freeMode='seat';camera.position.fromArray(a.sit);yaw=a.yaw;pitch=.03;}else{stamps.add(a.id);try{localStorage.setItem('aurora-city-stamps',JSON.stringify([...stamps]));}catch{}notify(`${a.name} / 散策スタンプ ${stamps.size}/3。${a.id==='canal-cafe'?'温かいコーヒーを受け取りました。':a.id==='market-food'?'マーケットのフードを受け取りました。':'展示を鑑賞しました。'}`);}return true;}
+  const a=nearActivity();if(a){if(a.kind==='seat'){let exit=a.exit;if(blocked(exit[0],exit[2])){exit=Array.from({length:8},(_,i)=>[a.x+Math.cos(i*Math.PI/4)*2.2,1.72,a.z+Math.sin(i*Math.PI/4)*2.2]).find(p=>!blocked(p[0],p[2]));}if(!exit){notify('立ち上がる場所が狭いため、周囲の配置を調整してください。');return true;}flightReturn=exit;freeMode='seat';camera.position.fromArray(a.sit);yaw=a.yaw;pitch=.03;}else{stamps.add(a.id);try{localStorage.setItem('aurora-city-stamps',JSON.stringify([...stamps]));}catch{}notify(`${a.name} / 散策スタンプ ${stamps.size}/3。${a.id==='canal-cafe'?'温かいコーヒーを受け取りました。':a.id==='market-food'?'マーケットのフードを受け取りました。':'展示を鑑賞しました。'}`);}return true;}
  }
  if(metroRiding){const p=expansion.metroPose(metroTime);if(p.dwell){metroRiding=false;metroIndex=p.index;camera.position.set(METRO_STOPS[p.index].x,16.52,-52);yaw=Math.PI;pitch=0;}return true;}
  if(roverDriving){roverDriving=false;camera.position.x+=3;return true;}
@@ -192,21 +213,22 @@ $('start').onclick=start;
 $('resume').onclick=start;
 $('reset').onclick=resetJourney;
 $('light').onclick=()=>{night=!night;$('light').textContent=night?'昼の街':'夜の街';};
-document.addEventListener('pointerlockchange',()=>{if(document.pointerLockElement!==renderer.domElement&&active)pause();});
-addEventListener('keydown',e=>{if(e.target.matches('select,input,textarea'))return;if(['KeyW','KeyS','KeyA','KeyD','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space'].includes(e.code))e.preventDefault();keys.add(e.code);if(e.code==='KeyR'&&!e.repeat)$('reset').click();if(e.code==='KeyF'&&!e.repeat)interact();if(e.code==='KeyV'&&!e.repeat)toggleDrone();if(e.code==='Escape')pause();});
+document.addEventListener('pointerlockchange',()=>{if(document.pointerLockElement!==renderer.domElement&&active&&!editorOpen)pause();});
+addEventListener('keydown',e=>{if(e.target.matches('select,input,textarea'))return;if(['KeyW','KeyS','KeyA','KeyD','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space'].includes(e.code))e.preventDefault();keys.add(e.code);if(e.code==='KeyR'&&!e.repeat)$('reset').click();if(e.code==='KeyF'&&!e.repeat)interact();if(e.code==='KeyV'&&!e.repeat)toggleDrone();if(e.code==='KeyB'&&!e.repeat)toggleEditor();if(editorOpen&&!e.repeat){if(e.code==='KeyP')$('prop-place').click();if(e.code==='KeyT')$('prop-rotate').click();if(e.code==='Delete')$('prop-remove').click();if(e.code==='KeyZ')$('prop-undo').click();}if(e.code==='Escape'){closeEditor();pause();}});
 addEventListener('keyup',e=>keys.delete(e.code));addEventListener('blur',()=>keys.clear());
 let dragging=false;renderer.domElement.addEventListener('mousedown',()=>{dragging=true;});addEventListener('mouseup',()=>dragging=false);
 addEventListener('mousemove',e=>{if(active&&(document.pointerLockElement||dragging)){yaw-=e.movementX*.0018;pitch-=e.movementY*.0018;pitch=Math.max(-1.35,Math.min(1.3,pitch));}});
 addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);});
 let steps=0,elapsed=0;
 renderer.setAnimationLoop(()=>{
-  const realDt=Math.min(clock.getDelta(),.25),dt=realDt;elapsed+=dt;
+  const realDt=Math.min(clock.getDelta(),.25),dt=realDt;elapsed+=dt;windTime.value=elapsed;
   let forward=0,side=0,moving=false;
   if(active){
     yaw+=((keys.has('KeyQ')?1:0)-(keys.has('KeyE')?1:0))*dt*1.35;
     if(journey.mode==='walking'&&!metroRiding&&!liftRide&&freeMode!=='seat'){
     forward=(keys.has('KeyW')||keys.has('ArrowUp')?1:0)-(keys.has('KeyS')||keys.has('ArrowDown')?1:0);
     side=(keys.has('KeyD')||keys.has('ArrowRight')?1:0)-(keys.has('KeyA')||keys.has('ArrowLeft')?1:0);
+    if(freeMode==='boat'){const p=stepBoat(camera.position,yaw,forward,side,dt);camera.position.x=p.x;camera.position.z=p.z;yaw=p.yaw;side=0;forward=0;}
     if(freeMode==='car'){yaw-=side*dt*.9*(forward<0?-1:1);side=0;}
     if(freeMode==='drone')flightY=droneHeight(flightY,(keys.has('Space')?1:0)-(keys.has('KeyX')?1:0),dt);
     moving=!!(forward||side);const norm=Math.hypot(forward,side)||1,speed=freeMode==='car'?10:freeMode==='drone'?16:roverDriving?9:keys.has('ShiftLeft')?3.8:1.45;
@@ -223,7 +245,7 @@ renderer.setAnimationLoop(()=>{
   if(active||!metroRiding)metroTime+=realDt;const metroPose=expansion.metroPose(metroTime);train.position.x=metroPose.x;
   const onPlatform=!upper&&journey.world==='city'&&camera.position.y>10&&Math.abs(camera.position.z+52)<3.5&&METRO_STOPS.some(s=>Math.abs(camera.position.x-s.x)<16);
   let floor=upper?expansion.lifts[upper.room].levels[upper.level]:journey.world==='planet'?galaxy.floorHeight(camera.position.x,camera.position.z):onPlatform?14.8:atCityStation?.32:(room||sidewalk)?.17:0;
-  if(freeMode==='drone')floor=flightY-1.72;if(freeMode==='seat')floor=-.57;
+  if(freeMode==='drone')floor=flightY-1.72;if(freeMode==='seat')floor=-.57;if(freeMode==='boat')floor=-.35;
   if(liftRide){if(active)liftRide.time+=realDt;const l=expansion.lifts[liftRide.room];floor=expansion.liftHeight(liftRide.from,liftRide.to,liftRide.time);l.cabin.position.y=floor;if(liftRide.time>=5){if(liftRide.level===0)upper=null;liftRide=null;}}
   if(riding){
     ridePosition.set(1.1,2.3,13.3);galaxy.train.localToWorld(ridePosition);camera.position.copy(ridePosition);
@@ -232,7 +254,10 @@ renderer.setAnimationLoop(()=>{
   else{camera.position.y=1.72+floor+(roverDriving?.9:0)+(moving?Math.sin(steps)*.018:0);camera.rotation.set(pitch,yaw,0,'YXZ');}
   if(roverDriving){expansion.rover.position.set(camera.position.x,floor,camera.position.z);expansion.rover.rotation.y=yaw;}
   if(freeMode==='car'){districts.car.position.set(camera.position.x,0,camera.position.z);districts.car.rotation.y=yaw;}
-  districts.update(dt,elapsed,camera,weather,riding?'space':journey.world);
+  if(freeMode==='boat'){sandbox.boat.position.x=camera.position.x;sandbox.boat.position.z=camera.position.z;sandbox.boat.rotation.y=yaw;}
+  districts.update(dt,elapsed,camera,weather,riding?'space':journey.world,night);
+  sandbox.update(elapsed,freeMode==='boat',keys.has('KeyW')||keys.has('KeyS'),camera,night,riding?'space':journey.world);
+  if(editorOpen){propCandidate=sandbox.candidate(camera,yaw,$('prop-type').value,propRotation);sandbox.preview(propCandidate,canBuild(),blocked);$('build-status').textContent=`${sandbox.items.length}/${MAX_PROPS} · ${sandbox.valid?'配置できます':'赤い場所には配置できません'} · ${Math.round(propRotation*180/Math.PI)%360}°`;}
   expansion.orrery.rotation.y+=dt*(discoveries.size===6?1:.2);for(const [i,b] of expansion.beacons.entries()){b.jewel.rotation.y+=dt;b.jewel.material.color.set(discoveries.has(i)?0xc5a45c:0x83e7d3);}
   for(const p of people){p.ob.visible=journey.world==='city'&&!riding&&Math.hypot(p.ob.position.x-camera.position.x,p.ob.position.z-camera.position.z)<125;if(p.ob.visible)p.mix.update(dt);p.ob.position.z-=dt*p.cfg.speed*p.cfg.dir;const min=p.cfg.min??-117,max=p.cfg.max??49;if(p.ob.position.z<min)p.ob.position.z=max;if(p.ob.position.z>max)p.ob.position.z=min;}
   stepTraffic(cars,dt,elapsed,data.trafficSignals||[],camera.position);
@@ -248,7 +273,7 @@ renderer.setAnimationLoop(()=>{
   if(!space&&weather==='sunset'){sun.color.set(0xffad71);sun.intensity*=.7;scene.fog.color.set(0x967d7c);scene.backgroundIntensity*=.58;}else sun.color.set(0xffe2be);
   if(!space&&weather==='rain'){scene.fog.density=.0028;scene.fog.color.set(0x71818a);sun.intensity*=.35;scene.backgroundIntensity*=.45;}
   galaxy.stars.material.opacity=space;
-  sun.target.position.set(camera.position.x,camera.position.y-20,camera.position.z-20);sun.position.set(camera.position.x-45,camera.position.y+105,camera.position.z+35);
+  sun.target.position.set(camera.position.x,camera.position.y-20,camera.position.z-20);sun.position.set(camera.position.x-(weather==='sunset'?75:45),camera.position.y+(weather==='sunset'?35:105),camera.position.z+35);
   $('position').textContent=`${camera.position.x.toFixed(0)} / ${(-camera.position.z).toFixed(0)} m`;
   document.documentElement.dataset.playing=String(active);
   document.documentElement.dataset.input=Array.from(keys).join(',');
@@ -286,13 +311,16 @@ renderer.setAnimationLoop(()=>{
   }
   $('mission').classList.toggle('hidden',journey.world!=='planet'||riding);
   if(canRoam()){
-   if(freeMode==='drone')action='F / V 地上に戻る';else if(freeMode==='car')action='F シティカーから降りる';else if(freeMode==='seat')action='F ベンチから立つ';
+   if(freeMode==='boat')action='F 船着き場へ戻る';else if(freeMode==='drone')action='F / V 地上に戻る';else if(freeMode==='car')action='F シティカーから降りる';else if(freeMode==='seat')action='F ベンチから立つ';
+   else if(Math.hypot(camera.position.x-BOAT_DOCK.exit[0],camera.position.z-BOAT_DOCK.exit[2])<4)action='F 運河ボートに乗る';
    else if(Math.hypot(camera.position.x-districts.car.position.x,camera.position.z-districts.car.position.z)<4)action='F シティカーに乗る';else{const a=nearActivity();if(a)action='F '+a.name;}
-   $('place').textContent=`${districtAt(camera.position.x,camera.position.z)} / ${freeMode==='drone'?`ドローン ${Math.round(flightY)}m`:freeMode==='car'?'シティカー':freeMode==='seat'?'休憩中':`散策スタンプ ${stamps.size}/3`}`;
+   $('place').textContent=`${districtAt(camera.position.x,camera.position.z)} / ${freeMode==='boat'?'運河ボート':freeMode==='drone'?`ドローン ${Math.round(flightY)}m`:freeMode==='car'?'シティカー':freeMode==='seat'?'休憩中':`散策スタンプ ${stamps.size}/3`}`;
   }
+  if(editorOpen){action='';$('interact').classList.add('hidden');}
   if(action){$('interact').textContent=action;$('interact').classList.remove('hidden');}else if(metroRiding||liftRide||onPlatform)$('interact').classList.add('hidden');
   document.documentElement.dataset.expansion=JSON.stringify({metroRiding,metroTime,upper,liftRide:!!liftRide,roverDriving,discoveries:[...discoveries],buildings:expansion.buildings.length});
   document.documentElement.dataset.freedom=JSON.stringify({mode:freeMode,weather,stamps:[...stamps],droneHeight:flightY,position:camera.position.toArray()});
+  document.documentElement.dataset.garden=JSON.stringify({editing:editorOpen,count:sandbox.items.length,valid:sandbox.valid,candidate:propCandidate,items:sandbox.items});
   document.documentElement.dataset.journey=JSON.stringify({...journey,position:camera.position.toArray().map(v=>+v.toFixed(2))});
   document.documentElement.dataset.facing=JSON.stringify(people.map(p=>{const f=p.sourceForward,a=p.ob.rotation.y;return +(Math.sin(a)*f.z+Math.cos(a)*f.x).toFixed(3)+','+(-Math.sin(a)*f.x+Math.cos(a)*f.z).toFixed(3);}));
   renderer.render(scene,camera);

@@ -2,7 +2,7 @@ import test from 'node:test';import assert from 'node:assert/strict';
 import * as T from '../vendor/three.module.js';
 import {createDistricts} from '../src/district-world.js';
 import {DISTRICT_PLACES,droneHeight,validStamps,districtAt} from '../src/freedom.mjs';
-globalThis.document={createElement(){return {width:0,height:0,getContext(){return {fillRect(){},strokeRect(){},fillText(){},beginPath(){},moveTo(){},lineTo(){},stroke(){}};}};}};
+globalThis.document={createElement(){return {width:0,height:0,getContext(){return {createImageData(w,h){return {data:new Uint8ClampedArray(w*h*4)};},putImageData(){},fillRect(){},strokeRect(){},fillText(){},beginPath(){},moveTo(){},lineTo(){},stroke(){}};}};}};
 test('district geometry leaves travel destinations and business entrances accessible',()=>{
  const d=createDistricts(new T.Scene(),[{x:120,z:-200,w:22,d:25,h:35}]);
  for(const p of DISTRICT_PLACES)assert.equal(d.blocked(p.x,p.z),false,p.name);

@@ -28,7 +28,7 @@ export function createExpansion(scene,rooms,roofHeights,train){
 
  for(const x of [-285,-210,150,285])for(let z=-290;z<140;z+=30){plant(x+10,0,z);box([2,.5,.8],[x+10,.4,z+5],wood);}
  box([45,.08,42],[180,.03,105],green);for(let i=0;i<9;i++)plant(164+i%3*14,0,90+Math.floor(i/3)*14);
- sign('GARDEN DISTRICT',[180,3,125],12);
+ sign('GARDEN DISTRICT',[160,2.5,125],7);
  // Extend the existing urban train, on its original east-west elevated alignment.
  box([610,.45,4.2],[0,14.4,-58],dark);for(const z of [-59,-57])box([610,.07,.08],[0,14.68,z],glow);
  for(let x=-290;x<310;x+=24)box([.7,14,.7],[x,7,-58],white);
