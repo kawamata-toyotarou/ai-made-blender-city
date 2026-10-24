@@ -10,6 +10,10 @@ import {createSandbox} from './sandbox-world.js';
 import {windTime} from './greenery.js';
 import {PROP_TYPES,MAX_PROPS,BOAT_DOCK,boatBlocked,stepBoat} from './sandbox.mjs';
 import {districtAt,droneHeight,validStamps} from './freedom.mjs';
+import {createMachineWorld} from './machine-world.js';
+import {createAdventure} from './adventure-world.js';
+import {createBody,requestJump,stepBody,createQuest,repairReactor,replyFor,spareCells} from './adventure.mjs';
+import {MACHINE,MACHINE_STOP,WORLD_NAMES,stopFor,destinations,journeyDuration,journeyReverse} from './journey.mjs';
 import {METRO_STOPS} from './expansion.mjs';
 import {PLANET,CITY_STOP,PLANET_STOP,JOURNEY_SECONDS,createJourney,boardJourney,advanceJourney,leaveJourney,nearStation,journeyPhase,forwardFromFeet,headingForMotion} from './journey.mjs';
 
@@ -54,7 +58,14 @@ for(let k=0;k<groups;k++){
 for(const l of data.lights){const p=new THREE.PointLight(0xffcd8b,35,20,2);p.position.set(l.x,l.z,-l.y);scene.add(p);}
 for(const l of data.indoorLights||[]){const p=new THREE.PointLight(0xffddb3,l.power,l.range,2);p.position.set(l.x,l.z,-l.y);scene.add(p);}
 const cars=createTraffic(),doors=(data.interiors||[]).map(r=>({...r,open:0}));
-const galaxy=createGalaxy(scene),journey=createJourney();
+const galaxy=createGalaxy(scene),journey=createJourney(),machine=createMachineWorld(scene),body=createBody();
+let quest=createQuest(null);try{quest=createQuest(JSON.parse(localStorage.getItem('aurora-nexus-v7')||'null'));}catch{}
+function saveQuest(){try{localStorage.setItem('aurora-nexus-v7',JSON.stringify(quest));}catch{notify('進行を保存できませんでした。今回はこの画面内で遊べます。');}}
+const adventure=createAdventure(scene,machine,quest,saveQuest),lastFootAnchor=new THREE.Vector3().fromArray(data.spawn);
+let footWorld='city',dialogueOpen=false,dialogueTarget=null,railMenuWorld='';
+function syncRailMenu(){if(railMenuWorld===journey.world)return;railMenuWorld=journey.world;$('rail-target').replaceChildren();for(const w of destinations(journey.world)){const o=document.createElement('option');o.value=w;o.textContent=w==='machine'?'機械惑星 NEXUS-9':WORLD_NAMES[w];$('rail-target').append(o);}}
+syncRailMenu();
+function setJourneyTrain(){galaxy.setTrain(journey.progress,journeyReverse(journey),journey.route==='outer'?machine.curve:galaxy.curve);}
 const ridePosition=new THREE.Vector3(),rideRotation=new THREE.Quaternion();
 const forwardAxes=[];
 function boxMesh(size,pos,material,parent=scene){const ob=new THREE.Mesh(new THREE.BoxGeometry(...size),material);ob.position.set(...pos);ob.castShadow=true;ob.receiveShadow=true;parent.add(ob);return ob;}
@@ -88,7 +99,7 @@ let metroRiding=false,metroTime=0,metroIndex=1,upper=null,liftRide=null,roverDri
 const discoveries=new Set();
 try{for(const i of JSON.parse(localStorage.getItem('aurora-survey-v4')||'[]'))if(Number.isInteger(i)&&i>=0&&i<6)discoveries.add(i);}catch{}
 for(const d of doors){const op=document.createElement('option');op.value=String(d.id);op.textContent=d.label;$('destination').append(op);}
-$('visit').onclick=()=>{if(journey.mode!=='walking'||journey.world!=='city')return;closeEditor();freeMode='foot';metroRiding=false;upper=null;liftRide=null;const d=doors[Number($('destination').value)];if(!d)return;camera.position.set(d.front-d.side*2.8,1.89,-d.doorY);yaw=-d.side*Math.PI/2;pitch=0;};
+$('visit').onclick=()=>{if(journey.mode!=='walking'||journey.world!=='city')return;body.reset=true;closeDialogue(false);closeEditor();freeMode='foot';metroRiding=false;upper=null;liftRide=null;const d=doors[Number($('destination').value)];if(!d)return;camera.position.set(d.front-d.side*2.8,1.89,-d.doorY);yaw=-d.side*Math.PI/2;pitch=0;};
 const people=[],clock=new THREE.Clock(),avatarClip=new THREE.Plane(new THREE.Vector3(0,-1,0),1.4);let avatar=null,avatarMixer=null,walkClip=null;
 function recolor(root,i){root.traverse(o=>{if(o.isMesh){o.castShadow=true;o.frustumCulled=false;if(i%4){o.material=o.material.clone();o.material.color.multiply(new THREE.Color([.8,.9,1,.9][i%4],[.85,.88,.9,1][i%4],[.9,.8,.85,.92][i%4]));}}});}
 const parseGLB=buffer=>new Promise((resolve,reject)=>new GLTFLoader().parse(buffer,'',resolve,reject));
@@ -114,13 +125,17 @@ Promise.all([parseGLB(bytes(assets.human).buffer),parseGLB(bytes(assets.civilian
    const ob=clone(original);ob.scale.multiplyScalar(scale);ob.position.set(a.x,.12-box.min.y*scale,a.z-5.2);ob.rotation.y=headingForMotion(0,1,soldierForward.x,soldierForward.z);recolor(ob,3);scene.add(ob);
    const mix=new THREE.AnimationMixer(ob),idle=gltf.animations.find(c=>/idle/i.test(c.name));if(idle)mix.clipAction(idle).play();people.push({ob,mix,cfg:{speed:0,dir:1,min:-10000,max:10000},sourceForward:soldierForward});
   }
+  for(const [i,[x,z,name]] of [[-108,12,'研究員 LIA'],[-70,12,'観測士 REN'],[-47,2,'技師 SOL']].entries()){
+   const ob=clone(original);ob.scale.multiplyScalar(scale);ob.position.set(PLANET.x+x,galaxy.floorHeight(PLANET.x+x,PLANET.z+z)-box.min.y*scale,PLANET.z+z);ob.rotation.y=Math.PI;recolor(ob,i+1);scene.add(ob);const mix=new THREE.AnimationMixer(ob),idle=gltf.animations.find(c=>/idle/i.test(c.name));if(idle)mix.clipAction(idle).play();people.push({ob,mix,cfg:{speed:0,dir:1,min:-1e5,max:1e5},sourceForward:soldierForward,world:'planet',name,role:'LUMENの研究員'});
+  }
   avatar.traverse(o=>{if(o.isMesh){o.material=o.material.clone();o.material.clippingPlanes=[avatarClip];}});
   avatarMixer=new THREE.AnimationMixer(avatar);if(walkClip)avatarMixer.clipAction(walkClip).play();
-  $('loading').textContent='準備完了。街の散策と、LUMENへの往復列車を楽しめます。';$('start').disabled=false;$('station').disabled=false;
+  $('loading').textContent='準備完了。街の散策と、LUMEN・NEXUS-9への銀河鉄道を楽しめます。';$('start').disabled=false;$('station').disabled=false;
   document.documentElement.dataset.people=people.length;document.documentElement.dataset.triangles=triangles;
 }).catch(e=>{$('loading').textContent='人物の読み込みに失敗しました。再度開いてください。';console.error(e);});
 
 function blocked(x,z,ignoreGarden=false){
+  if(journey.world==='machine')return machine.blocked(x,z,body.y,quest);
   if(freeMode==='drone')return x< -310||x>310||z< -310||z>155;
   if(freeMode==='boat')return boatBlocked(x,z);
   if(upper)return expansion.blocked(x,z,upper);
@@ -140,12 +155,24 @@ function move(dx,dz){
 }
 function start(){active=true;document.querySelector('details').open=false;$('pause').classList.add('hidden');renderer.domElement.requestPointerLock?.()?.catch?.(()=>{});}
 function pause(){active=false;keys.clear();document.exitPointerLock?.();$('pause').classList.remove('hidden');$('start').classList.add('hidden');$('resume').classList.remove('hidden');}
-function resetJourney(){closeEditor();freeMode='foot';flightReturn=null;metroRiding=false;upper=null;liftRide=null;roverDriving=false;$('liftpanel').classList.add('hidden');Object.assign(journey,createJourney());galaxy.setTrain(0);camera.position.fromArray(data.spawn);yaw=-.13;pitch=.055;keys.clear();}
-function goToStation(){if(journey.mode!=='walking')return;closeEditor();freeMode='foot';metroRiding=false;upper=null;liftRide=null;roverDriving=false;const stop=journey.world==='city'?CITY_STOP:PLANET_STOP;camera.position.fromArray(stop.exit);yaw=Math.PI/2;pitch=0;start();}
+function resetJourney(){body.reset=true;closeDialogue(false);closeEditor();freeMode='foot';flightReturn=null;metroRiding=false;upper=null;liftRide=null;roverDriving=false;$('liftpanel').classList.add('hidden');Object.assign(journey,createJourney());galaxy.setTrain(0);camera.position.fromArray(data.spawn);yaw=-.13;pitch=.055;keys.clear();}
+function goToStation(){if(journey.mode!=='walking')return;body.reset=true;closeDialogue(false);closeEditor();freeMode='foot';metroRiding=false;upper=null;liftRide=null;roverDriving=false;const stop=stopFor(journey.world);camera.position.fromArray(stop.exit);yaw=Math.PI/2;pitch=0;start();}
 function canRoam(){return !$('start').disabled&&journey.world==='city'&&journey.mode==='walking'&&!metroRiding&&!liftRide&&!upper&&!roverDriving;}
 function nearActivity(){return canRoam()?[...districts.actions,...sandbox.actions].filter(a=>Math.hypot(camera.position.x-a.x,camera.position.z-a.z)<2.7).sort((a,b)=>Math.hypot(camera.position.x-a.x,camera.position.z-a.z)-Math.hypot(camera.position.x-b.x,camera.position.z-b.z))[0]:null;}
 function notify(message){$('activity').textContent=message;$('activity').classList.remove('hidden');}
 function closeEditor(){editorOpen=false;$('editor').classList.add('hidden');sandbox.preview(null,false,blocked);}
+function canAct(){return active&&!dialogueOpen&&!editorOpen&&journey.mode==='walking'&&freeMode==='foot'&&!metroRiding&&!liftRide&&!roverDriving;}
+function nearbyPerson(){if(journey.mode!=='walking'||freeMode!=='foot'||metroRiding||liftRide||roverDriving||editorOpen)return null;const list=journey.world==='machine'?machine.robots:people.filter(p=>(p.world||'city')===journey.world);return list.map(p=>({p,d:p.ob.getWorldPosition(new THREE.Vector3()).distanceTo(camera.position.clone().add(new THREE.Vector3(0,-1.2,0)))})).filter(v=>v.d<3.8).sort((a,b)=>a.d-b.d)[0]?.p||null;}
+function answerDialogue(query){if(!dialogueTarget)return;$('dialogue-text').textContent=replyFor(dialogueTarget.role||'AURORAの市民',query,quest,journey.world);}
+function openDialogue(){if(!active||dialogueOpen)return;const p=nearbyPerson();if(!p){notify('近くの人や機械人に近づいてCを押してください。');return;}dialogueTarget=p;dialogueOpen=true;active=false;keys.clear();document.exitPointerLock?.();$('pause').classList.add('hidden');$('dialogue').classList.remove('hidden');$('dialogue-name').textContent=p.name||'AURORAの市民';answerDialogue('あなたは？');}
+function closeDialogue(resume=true){if(!dialogueOpen)return;dialogueOpen=false;dialogueTarget=null;$('dialogue').classList.add('hidden');if(resume)start();}
+function firePulse(){if(!canAct())return;const occluded=(x,z,y)=>journey.world==='machine'?machine.blocked(x,z,y,quest):blocked(x,z);const msg=adventure.attack(camera,journey.world,elapsed,occluded,people.filter(p=>(p.world||'city')===journey.world));if(msg)notify(msg);$('pulse-flash').classList.remove('hidden');setTimeout(()=>$('pulse-flash').classList.add('hidden'),90);}
+const nexusPlaces=[{name:'修復部品・西の回収場',x:-105,z:27.2},{name:'修復部品・中央の回収場',x:-50,z:28.2},{name:'修復部品・冷却炉の通り',x:-35,z:-29.8},{name:'冷却炉・作業区',x:-35,z:-26},{name:'冷却炉・端末',x:-35,z:-40.2},{name:'動力炉・作業区',x:62,z:-8},{name:'動力炉・端末',x:62,z:-22.2},{name:'通信炉・作業区',x:35,z:87},{name:'通信炉・端末',x:35,z:72.8},{name:'中央アーカイブ入口',x:0,z:22}];
+for(const [i,p] of nexusPlaces.entries()){const o=document.createElement('option');o.value=i;o.textContent=p.name;$('nexus-place').append(o);}
+$('nexus-go').onclick=()=>{if(journey.world!=='machine'||journey.mode!=='walking'||dialogueOpen)return;const p=nexusPlaces[Number($('nexus-place').value)];freeMode='foot';body.reset=true;camera.position.set(MACHINE.x+p.x,1.72,MACHINE.z+p.z);yaw=0;pitch=0;start();};
+$('talk').onclick=openDialogue;$('dialogue-close').onclick=()=>closeDialogue();$('attack-button').onclick=firePulse;
+for(const [id,q] of [['topic-place','ここは？'],['topic-work','何をすればいい？'],['topic-travel','旅の行き先'],['topic-controls','ジャンプと操作'],['topic-chat','雑談']])$(id).onclick=()=>answerDialogue(q);
+$('dialogue-form').onsubmit=e=>{e.preventDefault();answerDialogue($('dialogue-input').value);$('dialogue-input').value='';};
 function canBuild(){return canRoam()&&freeMode==='foot'&&camera.position.y<4;}
 function toggleEditor(){if(editorOpen){closeEditor();start();return;}if(!canBuild()){notify('街の地上で乗り物から降りて、編集モードを開いてください。');return;}editorOpen=true;document.querySelector('details').open=false;$('pause').classList.add('hidden');$('editor').classList.remove('hidden');$('activity').classList.add('hidden');active=true;document.exitPointerLock?.();keys.clear();}
 for(const p of PROP_TYPES){const o=document.createElement('option');o.value=p.id;o.textContent=p.name;$('prop-type').append(o);}
@@ -172,6 +199,12 @@ function closestLift(){return journey.world==='city'&&!metroRiding&&!liftRide?ex
 function specialAction(){
  if(journey.mode!=='walking')return false;
  if(editorOpen)return true;
+ if(journey.world==='machine'&&freeMode==='foot'){
+  const r=machine.reactors.find(r=>Math.hypot(camera.position.x-(MACHINE.x+r.x),camera.position.z-(MACHINE.z+r.z+5.5))<3.5);
+  if(r){const msg=repairReactor(quest,r.id);notify(msg);saveQuest();return true;}
+  if(Math.hypot(camera.position.x-MACHINE.x,camera.position.z-(MACHINE.z+4))<6){if(quest.reactors.length<3)notify('アーカイブは3基の動力炉の復旧を待っています。');else{quest.claimed=true;saveQuest();notify('星の記憶を回収！ 整備士バッジを獲得。機械惑星でShift移動が速くなりました。');}return true;}
+ }
+
  if(freeMode==='boat'){freeMode='foot';camera.position.fromArray(BOAT_DOCK.exit);yaw=-Math.PI/2;pitch=0;notify('船着き場へ戻りました。ボートは現在の場所に停泊しています。');return true;}
  if(freeMode==='drone'){toggleDrone();return true;}
  if(freeMode==='car'){const exit=[[2.6,0],[-2.6,0],[0,3],[0,-3]].find(([x,z])=>!blocked(camera.position.x+x,camera.position.z+z));if(!exit){notify('周囲が狭いため、広い場所へ移動してから降車してください。');return true;}freeMode='foot';camera.position.x+=exit[0];camera.position.z+=exit[1];return true;}
@@ -197,13 +230,13 @@ function specialAction(){
 function interact(){
  if(specialAction()){keys.clear();return;}
  if(!$('start').disabled&&journey.mode==='arrived'){
-  leaveJourney(journey);const stop=journey.world==='city'?CITY_STOP:PLANET_STOP;camera.position.fromArray(stop.exit);yaw=-Math.PI/2;pitch=0;keys.clear();start();
+  leaveJourney(journey);body.reset=true;syncRailMenu();const stop=stopFor(journey.world);camera.position.fromArray(stop.exit);yaw=-Math.PI/2;pitch=0;keys.clear();start();
  }else if(!$('start').disabled&&journey.mode==='walking'&&nearStation(journey,camera.position.x,camera.position.z)){
-  if(boardJourney(journey)){yaw=journey.origin==='planet'?1.15:-1.15;pitch=.04;keys.clear();start();}
+  if(boardJourney(journey,$('rail-target').value)){yaw=journey.origin==='planet'?1.15:-1.15;pitch=.04;keys.clear();start();}
  }
 }
 $('station').onclick=goToStation;$('interact').onclick=interact;
-$('skip').onclick=()=>{if(journey.mode==='riding'){advanceJourney(journey,JOURNEY_SECONDS);galaxy.setTrain(journey.progress,journey.origin==='planet');}};
+$('skip').onclick=()=>{if(journey.mode==='riding'){advanceJourney(journey,journeyDuration(journey));setJourneyTrain();}};
 for(const [i,s] of METRO_STOPS.entries()){const op=document.createElement('option');op.value=i;op.textContent=s.name;$('metro-destination').append(op);}
 $('metro').onclick=()=>{if(journey.mode!=='walking')return;resetJourney();metroIndex=Number($('metro-destination').value);camera.position.set(METRO_STOPS[metroIndex].x,16.52,-52);metroTime=metroIndex*30;start();};
 for(const [i,name] of ['1F ロビー','展望ラウンジ','屋上庭園'].entries()){$('floor'+i).onclick=()=>{if(liftChoice===null)return;const l=expansion.lifts[liftChoice],from=upper?l.levels[upper.level]:.17;liftRide={room:liftChoice,level:i,from,to:l.levels[i],time:0};upper={room:liftChoice,level:i};camera.position.x=l.x;camera.position.z=l.z;$('liftpanel').classList.add('hidden');start();};}
@@ -214,10 +247,10 @@ $('resume').onclick=start;
 $('reset').onclick=resetJourney;
 $('light').onclick=()=>{night=!night;$('light').textContent=night?'昼の街':'夜の街';};
 document.addEventListener('pointerlockchange',()=>{if(document.pointerLockElement!==renderer.domElement&&active&&!editorOpen)pause();});
-addEventListener('keydown',e=>{if(e.target.matches('select,input,textarea'))return;if(['KeyW','KeyS','KeyA','KeyD','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space'].includes(e.code))e.preventDefault();keys.add(e.code);if(e.code==='KeyR'&&!e.repeat)$('reset').click();if(e.code==='KeyF'&&!e.repeat)interact();if(e.code==='KeyV'&&!e.repeat)toggleDrone();if(e.code==='KeyB'&&!e.repeat)toggleEditor();if(editorOpen&&!e.repeat){if(e.code==='KeyP')$('prop-place').click();if(e.code==='KeyT')$('prop-rotate').click();if(e.code==='Delete')$('prop-remove').click();if(e.code==='KeyZ')$('prop-undo').click();}if(e.code==='Escape'){closeEditor();pause();}});
+addEventListener('keydown',e=>{if(e.target.matches('select,input,textarea'))return;if(dialogueOpen){if(e.code==='Escape')closeDialogue();return;}if(['KeyW','KeyS','KeyA','KeyD','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space'].includes(e.code))e.preventDefault();keys.add(e.code);if(e.code==='Space'&&!e.repeat&&canAct())requestJump(body,journey.world);if(e.code==='KeyJ'&&!e.repeat)firePulse();if(e.code==='KeyC'&&!e.repeat)openDialogue();if(e.code==='KeyR'&&!e.repeat)$('reset').click();if(e.code==='KeyF'&&!e.repeat)interact();if(e.code==='KeyV'&&!e.repeat)toggleDrone();if(e.code==='KeyB'&&!e.repeat)toggleEditor();if(editorOpen&&!e.repeat){if(e.code==='KeyP')$('prop-place').click();if(e.code==='KeyT')$('prop-rotate').click();if(e.code==='Delete')$('prop-remove').click();if(e.code==='KeyZ')$('prop-undo').click();}if(e.code==='Escape'){closeEditor();pause();}});
 addEventListener('keyup',e=>keys.delete(e.code));addEventListener('blur',()=>keys.clear());
-let dragging=false;renderer.domElement.addEventListener('mousedown',()=>{dragging=true;});addEventListener('mouseup',()=>dragging=false);
-addEventListener('mousemove',e=>{if(active&&(document.pointerLockElement||dragging)){yaw-=e.movementX*.0018;pitch-=e.movementY*.0018;pitch=Math.max(-1.35,Math.min(1.3,pitch));}});
+let dragging=false,mouseTravel=0;renderer.domElement.addEventListener('mousedown',()=>{dragging=true;mouseTravel=0;});renderer.domElement.addEventListener('click',()=>{if(document.pointerLockElement||mouseTravel<6)firePulse();});addEventListener('mouseup',()=>dragging=false);
+addEventListener('mousemove',e=>{if(dragging)mouseTravel+=Math.abs(e.movementX)+Math.abs(e.movementY);if(active&&(document.pointerLockElement||dragging)){yaw-=e.movementX*.0018;pitch-=e.movementY*.0018;pitch=Math.max(-1.35,Math.min(1.3,pitch));}});
 addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);});
 let steps=0,elapsed=0;
 renderer.setAnimationLoop(()=>{
@@ -231,27 +264,30 @@ renderer.setAnimationLoop(()=>{
     if(freeMode==='boat'){const p=stepBoat(camera.position,yaw,forward,side,dt);camera.position.x=p.x;camera.position.z=p.z;yaw=p.yaw;side=0;forward=0;}
     if(freeMode==='car'){yaw-=side*dt*.9*(forward<0?-1:1);side=0;}
     if(freeMode==='drone')flightY=droneHeight(flightY,(keys.has('Space')?1:0)-(keys.has('KeyX')?1:0),dt);
-    moving=!!(forward||side);const norm=Math.hypot(forward,side)||1,speed=freeMode==='car'?10:freeMode==='drone'?16:roverDriving?9:keys.has('ShiftLeft')?3.8:1.45;
+    moving=!!(forward||side);const norm=Math.hypot(forward,side)||1,speed=freeMode==='car'?10:freeMode==='drone'?16:roverDriving?9:keys.has('ShiftLeft')?(journey.world==='machine'&&quest.claimed?6:3.8):1.45;
     move((side*Math.cos(yaw)-forward*Math.sin(yaw))*dt*speed/norm,(-forward*Math.cos(yaw)-side*Math.sin(yaw))*dt*speed/norm);
     if(moving)steps+=dt*speed*4.5;
     }
   }
   const riding=journey.mode!=='walking';
   if(active)advanceJourney(journey,realDt);
-  galaxy.setTrain(journey.progress,journey.origin==='planet');
+  setJourneyTrain();syncRailMenu();
   const room=journey.world==='city'&&!riding?roomAt(doors,camera.position.x,camera.position.z):null;
   const sidewalk=Math.abs(camera.position.x)>12&&Math.abs(camera.position.x)<21;
   const atCityStation=journey.world==='city'&&Math.abs(camera.position.x+82)<4&&Math.abs(camera.position.z)<20;
   if(active||!metroRiding)metroTime+=realDt;const metroPose=expansion.metroPose(metroTime);train.position.x=metroPose.x;
   const onPlatform=!upper&&journey.world==='city'&&camera.position.y>10&&Math.abs(camera.position.z+52)<3.5&&METRO_STOPS.some(s=>Math.abs(camera.position.x-s.x)<16);
-  let floor=upper?expansion.lifts[upper.room].levels[upper.level]:journey.world==='planet'?galaxy.floorHeight(camera.position.x,camera.position.z):onPlatform?14.8:atCityStation?.32:(room||sidewalk)?.17:0;
+  let floor=upper?expansion.lifts[upper.room].levels[upper.level]:journey.world==='planet'?galaxy.floorHeight(camera.position.x,camera.position.z):journey.world==='machine'?Math.max(machine.floorHeight(camera.position.x,camera.position.z,body.y),nearStation(journey,camera.position.x,camera.position.z)?.32:0):onPlatform?14.8:atCityStation?.32:(room||sidewalk)?.17:0;
   if(freeMode==='drone')floor=flightY-1.72;if(freeMode==='seat')floor=-.57;if(freeMode==='boat')floor=-.35;
   if(liftRide){if(active)liftRide.time+=realDt;const l=expansion.lifts[liftRide.room];floor=expansion.liftHeight(liftRide.from,liftRide.to,liftRide.time);l.cabin.position.y=floor;if(liftRide.time>=5){if(liftRide.level===0)upper=null;liftRide=null;}}
+  const feetFree=journey.mode==='walking'&&freeMode==='foot'&&!metroRiding&&!liftRide&&!roverDriving;
+  if(feetFree){if(footWorld!==journey.world||lastFootAnchor.distanceTo(camera.position)>15)body.reset=true;stepBody(body,active?dt:0,floor,journey.world);floor=body.y;}else{body.reset=true;body.y=floor;body.v=0;body.grounded=true;}
+  footWorld=journey.world;lastFootAnchor.copy(camera.position);
   if(riding){
     ridePosition.set(1.1,2.3,13.3);galaxy.train.localToWorld(ridePosition);camera.position.copy(ridePosition);
     rideRotation.setFromEuler(new THREE.Euler(pitch,yaw,0,'YXZ'));camera.quaternion.copy(galaxy.train.quaternion).multiply(rideRotation);
   }else if(metroRiding){camera.position.set(metroPose.x,16.6,-58);camera.rotation.set(pitch,yaw,0,'YXZ');}
-  else{camera.position.y=1.72+floor+(roverDriving?.9:0)+(moving?Math.sin(steps)*.018:0);camera.rotation.set(pitch,yaw,0,'YXZ');}
+  else{camera.position.y=1.72+floor+(roverDriving?.9:0)+(moving&&body.grounded?Math.sin(steps)*.018:0);camera.rotation.set(pitch,yaw,0,'YXZ');}
   if(roverDriving){expansion.rover.position.set(camera.position.x,floor,camera.position.z);expansion.rover.rotation.y=yaw;}
   if(freeMode==='car'){districts.car.position.set(camera.position.x,0,camera.position.z);districts.car.rotation.y=yaw;}
   if(freeMode==='boat'){sandbox.boat.position.x=camera.position.x;sandbox.boat.position.z=camera.position.z;sandbox.boat.rotation.y=yaw;}
@@ -259,13 +295,20 @@ renderer.setAnimationLoop(()=>{
   sandbox.update(elapsed,freeMode==='boat',keys.has('KeyW')||keys.has('KeyS'),camera,night,riding?'space':journey.world);
   if(editorOpen){propCandidate=sandbox.candidate(camera,yaw,$('prop-type').value,propRotation);sandbox.preview(propCandidate,canBuild(),blocked);$('build-status').textContent=`${sandbox.items.length}/${MAX_PROPS} · ${sandbox.valid?'配置できます':'赤い場所には配置できません'} · ${Math.round(propRotation*180/Math.PI)%360}°`;}
   expansion.orrery.rotation.y+=dt*(discoveries.size===6?1:.2);for(const [i,b] of expansion.beacons.entries()){b.jewel.rotation.y+=dt;b.jewel.material.color.set(discoveries.has(i)?0xc5a45c:0x83e7d3);}
-  for(const p of people){p.ob.visible=journey.world==='city'&&!riding&&Math.hypot(p.ob.position.x-camera.position.x,p.ob.position.z-camera.position.z)<125;if(p.ob.visible)p.mix.update(dt);p.ob.position.z-=dt*p.cfg.speed*p.cfg.dir;const min=p.cfg.min??-117,max=p.cfg.max??49;if(p.ob.position.z<min)p.ob.position.z=max;if(p.ob.position.z>max)p.ob.position.z=min;}
+  for(const p of people){p.ob.visible=(p.world||'city')===journey.world&&!riding&&Math.hypot(p.ob.position.x-camera.position.x,p.ob.position.z-camera.position.z)<125;if(p.ob.visible)p.mix.update(dt);if(p!==dialogueTarget&&!(p.stunUntil>elapsed))p.ob.position.z-=dt*p.cfg.speed*p.cfg.dir;const min=p.cfg.min??-117,max=p.cfg.max??49;if(p.ob.position.z<min)p.ob.position.z=max;if(p.ob.position.z>max)p.ob.position.z=min;}
   stepTraffic(cars,dt,elapsed,data.trafficSignals||[],camera.position);
   for(const c of cars){c.ob.position.set(c.x,0,c.z);for(const wheel of c.wheels)if(wheel)wheel.rotation.x=-c.wheel;for(const m of c.brakes)m.emissiveIntensity=c.speed<.5?2.5:.6;}
   stepDoors(doors,camera.position,dt);for(const d of doors)for(const l of d.leaves)l.group.position.z=-d.doorY+l.sign*(.86+d.open*1.65);
   const phase=signalPhase(elapsed);for(const b of bulbs){b.m.color.set(b.color===phase?({red:0xe33425,amber:0xffba35,green:0x36e4a2}[b.color]):0x101819);b.m.emissive.copy(b.m.color);b.m.emissiveIntensity=b.color===phase?2.2:0;}
   if(avatar){avatarClip.constant=camera.position.y-.35;avatar.position.set(camera.position.x,floor,camera.position.z);const f=forwardAxes[0];avatar.rotation.y=headingForMotion(-Math.sin(yaw),-Math.cos(yaw),f.x,f.z);if(avatarMixer)avatarMixer.update(moving?dt:0);avatar.visible=active&&!riding&&!metroRiding&&!liftRide&&!roverDriving&&freeMode==='foot';}
-  const space=journey.world==='planet'&&!riding?1:riding?Math.max(0,Math.min(1,Math.max((camera.position.y-45)/220,(journey.progress-.75)/.12))):0;
+  machine.update(dt,elapsed,quest,dialogueTarget);
+  const event=adventure.update(dt,elapsed,journey.world,camera.position,canAct());if(event==='respawn'){camera.position.fromArray(MACHINE_STOP.exit);body.reset=true;notify('シールドを再起動して星港へ戻りました。修復の進行は保持しています。');}
+  if(canAct()&&journey.world==='machine')for(const c of machine.cells)if(!quest.cells.includes(c.id)&&Math.hypot(camera.position.x-(MACHINE.x+c.x),camera.position.z-(MACHINE.z+c.z))<1.4&&Math.abs(camera.position.y-.72-c.ob.position.y)<1.25){quest.cells.push(c.id);saveQuest();notify(`修復部品を回収！ 所持 ${spareCells(quest)}個`);}
+  const nearPerson=nearbyPerson();$('talk').classList.toggle('hidden',!nearPerson||dialogueOpen||!active);$('talk').textContent=nearPerson?`C ${nearPerson.name||'市民'}と話す`:'C 話す';
+  $('attack-button').classList.toggle('hidden',!active||!feetFree||editorOpen);$('adventure-hud').classList.toggle('hidden',!active||riding);$('adventure-hud').textContent=`Space ジャンプ · J パルス · C 会話${journey.world==='machine'?` · シールド ${adventure.shield}%`:adventure.score?` · 訓練スコア ${adventure.score}`:''}`;
+  $('machine-mission').classList.toggle('hidden',journey.world!=='machine'||riding);$('machine-mission').textContent=`NEXUS-9復旧 · 炉 ${quest.reactors.length}/3 · ドローン ${quest.defeated.length}/6 · 部品 ${spareCells(quest)}個${quest.claimed?' · 整備士バッジ獲得':quest.reactors.length===3?' · 中央アーカイブへ':' · 光る部品へジャンプ'}`;
+  document.documentElement.dataset.adventure=JSON.stringify({body,quest,shield:adventure.shield,dialogue:dialogueOpen});
+  const space=journey.world!=='city'&&!riding?1:riding&&journey.route==='outer'?1:riding?Math.max(0,Math.min(1,Math.max((camera.position.y-45)/220,(journey.progress-.75)/.12))):0;
   scene.background=space>.5?new THREE.Color(0x020611):env;
   scene.fog.density=.0015*(1-space)+.000008*space;scene.fog.color.set(night?0x14212c:0xa8b4bb).lerp(new THREE.Color(0x030817),space);
   scene.backgroundIntensity=night?.07:.75;scene.environmentIntensity=(night?.2:.7)*(1-space)+.5*space;
@@ -282,16 +325,16 @@ renderer.setAnimationLoop(()=>{
   document.documentElement.dataset.door=JSON.stringify(doors.map(d=>+d.open.toFixed(2)));
   const near=journey.mode==='walking'&&nearStation(journey,camera.position.x,camera.position.z);
   $('interact').classList.toggle('hidden',!near&&journey.mode!=='arrived');
-  $('interact').textContent=journey.mode==='arrived'?'F  降りて探索する':journey.world==='city'?'F  LUMEN行きに乗車':'F  AURORA行きに乗車';
-  $('station').disabled=riding||$('start').disabled;$('station').textContent=journey.world==='planet'?'帰りの駅へ':'銀河鉄道の駅へ';
-  $('visit').disabled=riding||journey.world!=='city';
+  $('interact').textContent=journey.mode==='arrived'?'F  降りて探索する':'F  '+WORLD_NAMES[$('rail-target').value]+'行きに乗車';
+  $('station').disabled=riding||$('start').disabled;$('station').textContent=journey.world!=='city'?'惑星の駅へ':'銀河鉄道の駅へ';
+  $('visit').disabled=riding||journey.world!=='city';$('nexus-go').disabled=riding||journey.world!=='machine';
   $('journey').classList.toggle('hidden',!riding);
-  $('route-from').textContent=journey.origin==='city'?'AURORA':'LUMEN';$('route-to').textContent=journey.destination==='city'?'AURORA':'LUMEN';
-  $('phase').textContent=journeyPhase(journey);$('progress').value=journey.time/JOURNEY_SECONDS;
-  $('remaining').textContent=journey.mode==='arrived'?'降車できます':`あと ${Math.ceil(JOURNEY_SECONDS-journey.time)} 秒${active?'':' / 休憩中'}`;
+  $('route-from').textContent=WORLD_NAMES[journey.origin];$('route-to').textContent=WORLD_NAMES[journey.destination];
+  $('phase').textContent=journeyPhase(journey);$('progress').value=journey.time/journeyDuration(journey);
+  $('remaining').textContent=journey.mode==='arrived'?'降車できます':`あと ${Math.ceil(journeyDuration(journey)-journey.time)} 秒${active?'':' / 休憩中'}`;
   $('skip').classList.toggle('hidden',journey.mode!=='riding');
-  $('place').textContent=riding?'GALAXY RAILWAY / 車窓を見回せます':journey.world==='planet'?'LUMEN / 結晶盆地・観測基地':room?`${room.label} / 館内`:`AURORA / 入れる建物 ${doors.length}棟`;
-  $('region').textContent=riding?'GALAXY RAILWAY':journey.world==='planet'?'LUMEN / CRYSTAL BASIN':'AURORA / STREET LIFE';
+  $('place').textContent=riding?'GALAXY RAILWAY / 車窓を見回せます':journey.world==='machine'?'NEXUS-9 / 機械惑星の工業区':journey.world==='planet'?'LUMEN / 結晶盆地・観測基地':room?`${room.label} / 館内`:`AURORA / 入れる建物 ${doors.length}棟`;
+  $('region').textContent=riding?'GALAXY RAILWAY':journey.world==='machine'?'NEXUS-9 / THE MACHINE WORLD':journey.world==='planet'?'LUMEN / CRYSTAL BASIN':'AURORA / STREET LIFE';
   let action='';
   if(!riding){
    if(metroRiding){action=metroPose.dwell?'F 市内電車を降りる':'';$('place').textContent=`市内電車 / 次は ${METRO_STOPS[metroPose.next].name}${metroPose.dwell?'（停車中）':''}`;}
@@ -316,6 +359,8 @@ renderer.setAnimationLoop(()=>{
    else if(Math.hypot(camera.position.x-districts.car.position.x,camera.position.z-districts.car.position.z)<4)action='F シティカーに乗る';else{const a=nearActivity();if(a)action='F '+a.name;}
    $('place').textContent=`${districtAt(camera.position.x,camera.position.z)} / ${freeMode==='boat'?'運河ボート':freeMode==='drone'?`ドローン ${Math.round(flightY)}m`:freeMode==='car'?'シティカー':freeMode==='seat'?'休憩中':`散策スタンプ ${stamps.size}/3`}`;
   }
+  if(journey.world==='machine'&&!riding){const r=machine.reactors.find(r=>Math.hypot(camera.position.x-(MACHINE.x+r.x),camera.position.z-(MACHINE.z+r.z+5.5))<3.5);if(r)action=`F ${r.name}の端末`;else if(Math.hypot(camera.position.x-MACHINE.x,camera.position.z-(MACHINE.z+4))<6)action='F 星の記憶を回収';}
+  if(dialogueOpen){action='';$('interact').classList.add('hidden');}
   if(editorOpen){action='';$('interact').classList.add('hidden');}
   if(action){$('interact').textContent=action;$('interact').classList.remove('hidden');}else if(metroRiding||liftRide||onPlatform)$('interact').classList.add('hidden');
   document.documentElement.dataset.expansion=JSON.stringify({metroRiding,metroTime,upper,liftRide:!!liftRide,roverDriving,discoveries:[...discoveries],buildings:expansion.buildings.length});

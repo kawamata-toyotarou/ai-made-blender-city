@@ -8,7 +8,8 @@ export const DISTRICT_PLACES=[
  {id:'food',name:'マーケット入口',x:216,z:82,yaw:0},
  {id:'gallery',name:'工房ギャラリー入口',x:-143,z:-236,yaw:0},
  {id:'harbor',name:'運河ボート船着き場',x:-289,z:72,yaw:Math.PI/2},
- {id:'build-garden',name:'自分のガーデンを作る広場',x:180,z:119,yaw:0}
+ {id:'build-garden',name:'自分のガーデンを作る広場',x:180,z:119,yaw:0},
+ {id:'training',name:'パルス訓練場',x:-146,z:-205,yaw:0}
 ];
 export const WEATHER=['clear','sunset','rain'];
 export function districtAt(x,z){return x< -220?'運河・リバーサイド':z< -175?'北・メイカーズ街':x>105?'東・ガーデン＆マーケット':'AURORA 中央街区';}

@@ -145,7 +145,7 @@ export function createGalaxy(scene){
  const starsGeo=new T.BufferGeometry();starsGeo.setAttribute('position',new T.Float32BufferAttribute(starPositions,3));starsGeo.setAttribute('color',new T.Float32BufferAttribute(starColors,3));
  const stars=new T.Points(starsGeo,new T.PointsMaterial({size:6,sizeAttenuation:true,vertexColors:true,transparent:true,opacity:0,depthWrite:false,fog:false}));group.add(stars);
  const starGlow=new T.Sprite(new T.SpriteMaterial({color:0xa8c6ed,transparent:true,opacity:.24}));starGlow.position.set(11000,7000,-11000);starGlow.scale.set(70,70,1);group.add(starGlow);
- function setTrain(u,reverse=false){const p=curve.getPoint(Math.max(0,Math.min(1,u))),t=curve.getTangent(Math.max(0,Math.min(1,u))).multiplyScalar(reverse?-1:1);train.position.copy(p);train.quaternion.setFromRotationMatrix(new T.Matrix4().lookAt(p,p.clone().add(t),new T.Vector3(0,1,0)));train.updateMatrixWorld(true);}
+ function setTrain(u,reverse=false,path=curve){const p=path.getPoint(Math.max(0,Math.min(1,u))),t=path.getTangent(Math.max(0,Math.min(1,u))).multiplyScalar(reverse?-1:1);train.position.copy(p);train.quaternion.setFromRotationMatrix(new T.Matrix4().lookAt(p,p.clone().add(t),new T.Vector3(0,1,0)));train.updateMatrixWorld(true);}
  setTrain(0);
  function blockedPlanet(x,z){if(!withinPlanet(x-PLANET.x,z-PLANET.z))return true;return planetColliders.some(b=>Math.abs(x-b.x)<b.w/2+.3&&Math.abs(z-b.z)<b.d/2+.3);}
  return {group,train,curve,stars,planet,earth,setTrain,blockedPlanet,floorHeight,cityColliders,planetColliders};
