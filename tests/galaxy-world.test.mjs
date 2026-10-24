@@ -2,6 +2,7 @@ import test from 'node:test';import assert from 'node:assert/strict';
 import * as T from '../vendor/three.module.js';
 import {createGalaxy} from '../src/galaxy-world.js';
 import {PLANET,CITY_STOP,PLANET_STOP} from '../src/journey.mjs';
+import {lumenReserved} from '../src/atlas.mjs';
 // Geometry/collision checks do not need a GPU. Canvas text is irrelevant to them.
 globalThis.document={createElement(){return {width:0,height:0,getContext(){return {fillRect(){},strokeRect(){},fillText(){},putImageData(){},createImageData(w,h){return {data:new Uint8ClampedArray(w*h*4)};}};}};}};
 test('the actual generated planet has an open arrival corridor and an enterable habitat',()=>{
@@ -14,4 +15,8 @@ test('the actual generated planet has an open arrival corridor and an enterable 
  g.setTrain(0);assert.ok(g.train.position.distanceTo(new T.Vector3(CITY_STOP.x,CITY_STOP.y,CITY_STOP.z))<1e-6);
  g.setTrain(1);assert.ok(g.train.position.distanceTo(new T.Vector3(PLANET_STOP.x,PLANET_STOP.y,PLANET_STOP.z))<1e-6);
  assert.ok(g.planetColliders.length>40);
+});
+test('all new Lumen sites and their entrance paths stay free of randomly placed rocks and crystals',()=>{
+ const g=createGalaxy(new T.Scene());for(const b of g.planetColliders)assert.equal(lumenReserved(b.x-PLANET.x,b.z-PLANET.z),false);
+ for(let z=-65;z>=-120;z-=.5)assert.equal(g.blockedPlanet(PLANET.x-110,PLANET.z+z),false);
 });

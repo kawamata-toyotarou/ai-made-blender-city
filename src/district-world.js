@@ -134,5 +134,5 @@ export function createDistricts(scene,buildings){
   localLights.forEach((l,i)=>{const n=near[i];l.intensity=night&&world==='city'&&n.d<18?55:0;l.position.set(n.p[0],2.95,n.p[1]);});
  }
  const layout=[...batches].map(([m,items])=>({color:m.color.toArray(),metal:m.metalness,rough:m.roughness,items}));
- return {root,car,actions,solids,blocked,update,places:DISTRICT_PLACES,batchCount:batches.size,layout};
+ return {root,car,dynamic:[car,canal,pools],actions,solids,blocked,update,places:DISTRICT_PLACES,batchCount:batches.size,layout};
 }

@@ -104,5 +104,5 @@ export function createMachineWorld(scene){
   archiveGate.position.y=quest.reactors.length===3?8:2.5;archive.rotation.y=time*.5;archiveRings.forEach((r,i)=>r.rotation.set(time*.25*(i+1),time*.14,.6));fans.forEach(f=>f.rotation.y=time*1.5);
  }
  function floorHeight(x,z,feet=0){x-=MACHINE.x;z-=MACHINE.z;let y=0;for(const b of colliders)if(b.h<2.5&&feet>=b.h-.08&&Math.abs(x-b.x)<b.w/2+.25&&Math.abs(z-b.z)<b.d/2+.25)y=Math.max(y,b.h);return y;}
- return {root,ground,curve,globe,robots,drones,cells,reactors,archive,colliders,blocked,floorHeight,update};
+ return {root,ground,curve,globe,robots,drones,cells,reactors,archive,colliders,blocked,floorHeight,update,dynamic:[...fans,...robots.map(r=>r.ob),...drones.map(d=>d.ob),...cells.map(c=>c.ob),...reactors.map(r=>r.core),archive,archiveGate,...archiveRings]};
 }

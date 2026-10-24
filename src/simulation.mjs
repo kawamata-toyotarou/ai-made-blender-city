@@ -1,3 +1,4 @@
+import {cityContains} from './atlas.mjs';
 export const ROUTE_MIN=-145,ROUTE_MAX=65;
 export function signalPhase(time){const t=time%28;return t<18?'green':t<21?'amber':'red';}
 export function createTraffic(){return [-6,6].flatMap((x,lane)=>[-43,4,54,106].map((y,i)=>({x,z:-y,dir:lane===0?-1:1,speed:0,cruise:6.8+i*.35,wheel:0,id:lane*4+i})));}
@@ -21,7 +22,7 @@ export function roomAt(rooms,x,z){return rooms.find(r=>Math.abs(x-r.x)<r.w/2-.12
 export function stepDoors(doors,player,dt){for(const d of doors){const near=Math.hypot(player.x-d.front,player.z+d.doorY)<4.8;d.open+=(Number(near)-d.open)*Math.min(1,dt*4);}}
 export function blockedAt(x,z,colliders,doors,cars){
   const r=.28;
-  if(x< -310||x>310||z< -310||z>155)return true;
+  if(!cityContains(x,z))return true;
   if(colliders.some(b=>Math.abs(x-b.x)<b.w/2+r&&Math.abs(z+b.y)<b.d/2+r))return true;
   if(doors.some(d=>d.open<.8&&Math.abs(x-d.front)<.23+r&&Math.abs(z+d.doorY)<1.7+r))return true;
   if(cars.some(c=>Math.abs(x-c.x)<1.2&&Math.abs(z-c.z)<2.65))return true;

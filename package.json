@@ -1,6 +1,6 @@
 {
   "name": "ai-made-blender-city",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "private": true,
   "description": "Offline walkable Blender city with a galactic passenger railway and explorable planet Lumen",
   "scripts": {
@@ -9,5 +9,6 @@
   },
   "devDependencies": {
     "esbuild": "0.25.10"
-  }
+  },
+  "type": "module"
 }

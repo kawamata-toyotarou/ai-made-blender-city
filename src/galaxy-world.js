@@ -1,4 +1,5 @@
 import * as T from '../vendor/three.module.js';
+import {lumenReserved} from './atlas.mjs';
 import {PLANET,CITY_STOP,PLANET_STOP,RAIL_POINTS,terrainHeight,withinPlanet} from './journey.mjs';
 
 export function createGalaxy(scene){
@@ -103,7 +104,7 @@ export function createGalaxy(scene){
  let seed=2077;const random=()=>{seed=(Math.imul(seed,1664525)+1013904223)>>>0;return seed/4294967296;};
  const rocks=new T.InstancedMesh(new T.IcosahedronGeometry(1,1),stone,190),crystals=new T.InstancedMesh(new T.ConeGeometry(1,1,5),teal,110);
  for(const [instances,count,crystal] of [[rocks,190,false],[crystals,110,true]])for(let i=0;i<count;i++){
-  let x,z;do{x=(random()-.5)*390;z=(random()-.5)*390;}while(Math.hypot(x,z)>195||(x< -25&&Math.abs(z)<32)||Math.hypot(x-25,z+25)<40);
+  let x,z;do{x=(random()-.5)*390;z=(random()-.5)*390;}while(Math.hypot(x,z)>195||(x< -25&&Math.abs(z)<32)||Math.hypot(x-25,z+25)<40||lumenReserved(x,z));
   const h=terrainHeight(x,z),size=crystal?1.5+random()*5:.6+random()*3;
   dummy.position.set(x,h+(crystal?size*.5:size*.35),z);dummy.rotation.set(crystal?0:random(),random()*6.28,crystal?(random()-.5)*.3:random());dummy.scale.set(crystal?size*.35:size,size,crystal?size*.35:size*.8);dummy.updateMatrix();instances.setMatrixAt(i,dummy.matrix);
   if(size>2.5)collider(x,z,crystal?size*.5:size*1.5,crystal?size*.5:size*1.3);
