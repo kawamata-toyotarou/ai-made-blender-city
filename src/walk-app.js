@@ -1,4 +1,7 @@
 import * as THREE from '../vendor/three.module.js';
+import {createActivityWorld} from './activities-world.js';
+import {createActivitiesUI} from './activities-ui.js';
+import {createActivities,collectCard,CARDS,TERMINALS} from './activities.mjs';
 import {createLandmarks} from './landmarks-world.js';
 import {batchStatic,partitionCity,createLightPool,createWorldVisibility} from './render-budget.js';
 import {ATLAS_PLACES,OFFSETS,cityContains,validAtlas,stepSkimmer} from './atlas.mjs';
@@ -32,7 +35,8 @@ document.body.prepend(renderer.domElement);
 const scene=new THREE.Scene();scene.fog=new THREE.FogExp2(0xa8b4bb,.003);
 const camera=new THREE.PerspectiveCamera(67,innerWidth/innerHeight,.12,24000);
 camera.rotation.order='YXZ';camera.position.fromArray(data.spawn);
-let yaw=-.13,pitch=.055,active=false,night=false;const keys=new Set();
+let yaw=-.13,pitch=.055,active=false,night=false;let pointerWasLocked=false,ignorePointerExit=false;const keys=new Set();
+function releasePointer(){ignorePointerExit=true;document.exitPointerLock?.();}
 const hemisphere=new THREE.HemisphereLight(0xc1d6ed,0x66635c,1.7);scene.add(hemisphere);
 const sun=new THREE.DirectionalLight(0xffe2be,2.8);sun.position.set(-50,110,25);sun.castShadow=true;
 sun.shadow.mapSize.set(2048,2048);Object.assign(sun.shadow.camera,{left:-48,right:48,top:48,bottom:-48,near:5,far:250});
@@ -106,11 +110,21 @@ const people=[],clock=new THREE.Clock(),avatarClip=new THREE.Plane(new THREE.Vec
 function recolor(root,i){root.traverse(o=>{if(o.isMesh){o.castShadow=true;if(o.isSkinnedMesh){o.computeBoundingSphere();o.boundingSphere.radius*=3;}o.frustumCulled=true;if(i%4){o.material=o.material.clone();o.material.color.multiply(new THREE.Color([.8,.9,1,.9][i%4],[.85,.88,.9,1][i%4],[.9,.8,.85,.92][i%4]));}}});}
 const parseGLB=buffer=>new Promise((resolve,reject)=>new GLTFLoader().parse(buffer,'',resolve,reject));
 const landmarks=await createLandmarks(scene,parseGLB,bytes(window.LANDMARK_ASSET).buffer);
-const optimized={expansion:batchStatic(expansion.root,{exclude:[...expansion.lifts.map(l=>l.cabin),...expansion.beacons.map(b=>b.jewel),expansion.rover,expansion.orrery]}),districts:batchStatic(districts.root,{exclude:districts.dynamic}),galaxy:batchStatic(galaxy.group,{exclude:[galaxy.train]}),machine:batchStatic(machine.root,{exclude:machine.dynamic}),landmarks:landmarks.batching};
+let lifeState=createActivities(null);try{lifeState=createActivities(JSON.parse(localStorage.getItem('aurora-life-v9')||'null'));}catch{}
+function saveLife(){try{localStorage.setItem('aurora-life-v9',JSON.stringify(lifeState));}catch{notify('記録をこのブラウザーに保存できませんでした。旅の記録からJSONに書き出せます。');}}
+const activityWorld=await createActivityWorld(scene,parseGLB,bytes(window.ACTIVITY_ASSET).buffer,lifeState);
+let lifeUI=null,lifeWasActive=false;
+const lifeContext=()=>({world:journey.world,position:camera.position,yaw,started:!$('start').disabled,canTravel:journey.mode==='walking'});
+lifeUI=createActivitiesUI({state:lifeState,save:saveLife,notify,canOpen:()=>!$('start').disabled&&!dialogueOpen&&!editorOpen,
+ onOpen:()=>{lifeWasActive=active;active=false;keys.clear();releasePointer();document.querySelector('details').open=false;$('pause').classList.add('hidden');},
+ onClose:()=>{keys.clear();if(lifeWasActive)start();else pause();},getContext:lifeContext,
+ onTravel:p=>{if(journey.mode!=='walking'||p.world!==journey.world)return;body.reset=true;closeDialogue(false);closeEditor();freeMode='foot';metroRiding=false;upper=null;liftRide=null;roverDriving=false;flightReturn=null;const [ox,oz]=OFFSETS[p.world];camera.position.set(ox+p.x,1.72,oz+p.z);yaw=p.yaw||0;pitch=.08;start();}
+});
+const optimized={expansion:batchStatic(expansion.root,{exclude:[...expansion.lifts.map(l=>l.cabin),...expansion.beacons.map(b=>b.jewel),expansion.rover,expansion.orrery]}),districts:batchStatic(districts.root,{exclude:districts.dynamic}),galaxy:batchStatic(galaxy.group,{exclude:[galaxy.train]}),machine:batchStatic(machine.root,{exclude:machine.dynamic}),landmarks:landmarks.batching,activities:activityWorld.batching};
 
 const lightPool=createLightPool(scene);
 let atlas=validAtlas([]);try{atlas=validAtlas(JSON.parse(localStorage.getItem('aurora-atlas-v8')||'[]'));}catch{}
-let atlasWorld='',worldVisibility=null;
+let atlasWorld='',worldVisibility=createWorldVisibility(scene,{exclude:[galaxy.train,train,sun,sun.target,adventure.root]});
 function syncAtlasMenu(){if(atlasWorld===journey.world)return;atlasWorld=journey.world;$('atlas-place').replaceChildren();for(const p of ATLAS_PLACES.filter(p=>p.world===journey.world)){const o=document.createElement('option');o.value=p.id;o.textContent=p.name;$('atlas-place').append(o);}}
 syncAtlasMenu();
 $('atlas-go').onclick=()=>{if(journey.mode!=='walking')return;const p=ATLAS_PLACES.find(p=>p.id===$('atlas-place').value&&p.world===journey.world);if(!p)return;body.reset=true;closeDialogue(false);closeEditor();freeMode='foot';metroRiding=false;upper=null;liftRide=null;roverDriving=false;flightReturn=null;const [ox,oz]=OFFSETS[p.world];camera.position.set(ox+p.x,1.72,oz+p.z);yaw=p.yaw;pitch=p.id==='summit'?-.1:0;start();};
@@ -154,14 +168,13 @@ Promise.all([parseGLB(bytes(assets.human).buffer),parseGLB(bytes(assets.civilian
   }
   avatar.traverse(o=>{if(o.isMesh){o.material=o.material.clone();o.material.clippingPlanes=[avatarClip];}});
   avatarMixer=new THREE.AnimationMixer(avatar);if(walkClip)avatarMixer.clipAction(walkClip).play();
-  worldVisibility=createWorldVisibility(scene,{exclude:[galaxy.train,train,sun,sun.target,avatar,adventure.root]});
   $('loading').textContent='準備完了。街の散策と、LUMEN・NEXUS-9への銀河鉄道を楽しめます。';$('start').disabled=false;$('station').disabled=false;
   document.documentElement.dataset.people=people.length;document.documentElement.dataset.triangles=triangles;
 }).catch(e=>{$('loading').textContent='人物の読み込みに失敗しました。再度開いてください。';console.error(e);});
 
 function blocked(x,z,ignoreGarden=false){
   if(freeMode==='aircar')return false;
-  if(landmarks.blocked(journey.world,x,z,body.y))return true;
+  if(activityWorld.blocked(journey.world,x,z,body.y)||landmarks.blocked(journey.world,x,z,body.y))return true;
   if(journey.world==='machine')return machine.blocked(x,z,body.y,quest);
   if(freeMode==='drone')return !cityContains(x,z);
   if(freeMode==='boat')return boatBlocked(x,z);
@@ -181,19 +194,19 @@ function move(dx,dz){
   for(let i=0;i<count;i++){if(!hit(camera.position.x+dx/count,camera.position.z))camera.position.x+=dx/count;if(!hit(camera.position.x,camera.position.z+dz/count))camera.position.z+=dz/count;}
 }
 function start(){active=true;$('activity').classList.add('hidden');document.querySelector('details').open=false;$('pause').classList.add('hidden');renderer.domElement.requestPointerLock?.()?.catch?.(()=>{});}
-function pause(){active=false;keys.clear();document.exitPointerLock?.();$('pause').classList.remove('hidden');$('start').classList.add('hidden');$('resume').classList.remove('hidden');}
+function pause(){active=false;keys.clear();releasePointer();$('pause').classList.remove('hidden');$('start').classList.add('hidden');$('resume').classList.remove('hidden');}
 function resetJourney(){body.reset=true;closeDialogue(false);closeEditor();freeMode='foot';flightReturn=null;metroRiding=false;upper=null;liftRide=null;roverDriving=false;$('liftpanel').classList.add('hidden');Object.assign(journey,createJourney());galaxy.setTrain(0);camera.position.fromArray(data.spawn);yaw=-.13;pitch=.055;keys.clear();}
 function goToStation(){if(journey.mode!=='walking')return;body.reset=true;closeDialogue(false);closeEditor();freeMode='foot';metroRiding=false;upper=null;liftRide=null;roverDriving=false;const stop=stopFor(journey.world);camera.position.fromArray(stop.exit);yaw=Math.PI/2;pitch=0;start();}
 function canRoam(){return !$('start').disabled&&journey.world==='city'&&journey.mode==='walking'&&!metroRiding&&!liftRide&&!upper&&!roverDriving;}
 function nearActivity(){return canRoam()?[...districts.actions,...sandbox.actions].filter(a=>Math.hypot(camera.position.x-a.x,camera.position.z-a.z)<2.7).sort((a,b)=>Math.hypot(camera.position.x-a.x,camera.position.z-a.z)-Math.hypot(camera.position.x-b.x,camera.position.z-b.z))[0]:null;}
 function notify(message){$('activity').textContent=message;$('activity').classList.remove('hidden');}
 function closeEditor(){editorOpen=false;$('editor').classList.add('hidden');sandbox.preview(null,false,blocked);}
-function canAct(){return active&&!dialogueOpen&&!editorOpen&&journey.mode==='walking'&&freeMode==='foot'&&!metroRiding&&!liftRide&&!roverDriving;}
+function canAct(){return active&&!dialogueOpen&&!editorOpen&&!lifeUI?.modal&&journey.mode==='walking'&&freeMode==='foot'&&!metroRiding&&!liftRide&&!roverDriving;}
 function nearbyPerson(){if(journey.mode!=='walking'||freeMode!=='foot'||metroRiding||liftRide||roverDriving||editorOpen)return null;const list=journey.world==='machine'?machine.robots:people.filter(p=>(p.world||'city')===journey.world);return list.map(p=>({p,d:p.ob.getWorldPosition(new THREE.Vector3()).distanceTo(camera.position.clone().add(new THREE.Vector3(0,-1.2,0)))})).filter(v=>v.d<3.8).sort((a,b)=>a.d-b.d)[0]?.p||null;}
 function answerDialogue(query){if(!dialogueTarget)return;$('dialogue-text').textContent=replyFor(dialogueTarget.role||'AURORAの市民',query,quest,journey.world);}
-function openDialogue(){if(!active||dialogueOpen)return;const p=nearbyPerson();if(!p){notify('近くの人や機械人に近づいてCを押してください。');return;}dialogueTarget=p;dialogueOpen=true;active=false;keys.clear();document.exitPointerLock?.();$('pause').classList.add('hidden');$('dialogue').classList.remove('hidden');$('dialogue-name').textContent=p.name||'AURORAの市民';answerDialogue('あなたは？');}
+function openDialogue(){if(!active||dialogueOpen)return;const p=nearbyPerson();if(!p){notify('近くの人や機械人に近づいてCを押してください。');return;}dialogueTarget=p;dialogueOpen=true;active=false;keys.clear();releasePointer();$('pause').classList.add('hidden');$('dialogue').classList.remove('hidden');$('dialogue-name').textContent=p.name||'AURORAの市民';answerDialogue('あなたは？');}
 function closeDialogue(resume=true){if(!dialogueOpen)return;dialogueOpen=false;dialogueTarget=null;$('dialogue').classList.add('hidden');if(resume)start();}
-function firePulse(){if(!canAct())return;const occluded=(x,z,y)=>journey.world==='machine'?machine.blocked(x,z,y,quest):blocked(x,z);const msg=adventure.attack(camera,journey.world,elapsed,occluded,people.filter(p=>(p.world||'city')===journey.world));if(msg)notify(msg);$('pulse-flash').classList.remove('hidden');setTimeout(()=>$('pulse-flash').classList.add('hidden'),90);}
+function firePulse(){if(!canAct())return;const occluded=(x,z,y)=>activityWorld.blocked(journey.world,x,z,y)||landmarks.blocked(journey.world,x,z,y)||(journey.world==='machine'?machine.blocked(x,z,y,quest):blocked(x,z));const msg=adventure.attack(camera,journey.world,elapsed,occluded,people.filter(p=>(p.world||'city')===journey.world));if(msg)notify(msg);$('pulse-flash').classList.remove('hidden');setTimeout(()=>$('pulse-flash').classList.add('hidden'),90);}
 const nexusPlaces=[{name:'修復部品・西の回収場',x:-105,z:27.2},{name:'修復部品・中央の回収場',x:-50,z:28.2},{name:'修復部品・冷却炉の通り',x:-35,z:-29.8},{name:'冷却炉・作業区',x:-35,z:-26},{name:'冷却炉・端末',x:-35,z:-40.2},{name:'動力炉・作業区',x:62,z:-8},{name:'動力炉・端末',x:62,z:-22.2},{name:'通信炉・作業区',x:35,z:87},{name:'通信炉・端末',x:35,z:72.8},{name:'中央アーカイブ入口',x:0,z:22}];
 for(const [i,p] of nexusPlaces.entries()){const o=document.createElement('option');o.value=i;o.textContent=p.name;$('nexus-place').append(o);}
 $('nexus-go').onclick=()=>{if(journey.world!=='machine'||journey.mode!=='walking'||dialogueOpen)return;const p=nexusPlaces[Number($('nexus-place').value)];freeMode='foot';body.reset=true;camera.position.set(MACHINE.x+p.x,1.72,MACHINE.z+p.z);yaw=0;pitch=0;start();};
@@ -201,7 +214,7 @@ $('talk').onclick=openDialogue;$('dialogue-close').onclick=()=>closeDialogue();$
 for(const [id,q] of [['topic-place','ここは？'],['topic-work','何をすればいい？'],['topic-travel','旅の行き先'],['topic-controls','ジャンプと操作'],['topic-chat','雑談']])$(id).onclick=()=>answerDialogue(q);
 $('dialogue-form').onsubmit=e=>{e.preventDefault();answerDialogue($('dialogue-input').value);$('dialogue-input').value='';};
 function canBuild(){return canRoam()&&freeMode==='foot'&&camera.position.y<4;}
-function toggleEditor(){if(editorOpen){closeEditor();start();return;}if(!canBuild()){notify('街の地上で乗り物から降りて、編集モードを開いてください。');return;}editorOpen=true;document.querySelector('details').open=false;$('pause').classList.add('hidden');$('editor').classList.remove('hidden');$('activity').classList.add('hidden');active=true;document.exitPointerLock?.();keys.clear();}
+function toggleEditor(){if(editorOpen){closeEditor();start();return;}if(!canBuild()){notify('街の地上で乗り物から降りて、編集モードを開いてください。');return;}editorOpen=true;document.querySelector('details').open=false;$('pause').classList.add('hidden');$('editor').classList.remove('hidden');$('activity').classList.add('hidden');active=true;releasePointer();keys.clear();}
 for(const p of PROP_TYPES){const o=document.createElement('option');o.value=p.id;o.textContent=p.name;$('prop-type').append(o);}
 $('build').onclick=toggleEditor;$('build-close').onclick=()=>{closeEditor();start();};
 $('prop-rotate').onclick=()=>{propRotation+=Math.PI/4;};
@@ -226,6 +239,7 @@ function closestLift(){return journey.world==='city'&&!metroRiding&&!liftRide?ex
 function specialAction(){
  if(journey.mode!=='walking')return false;
  if(editorOpen)return true;
+ if(freeMode==='foot'&&!metroRiding&&!liftRide&&!upper&&!roverDriving){const t=activityWorld.nearby(journey.world,camera.position);if(t){lifeUI.use(t);return true;}}
  if(atlasAction())return true;
  if(journey.world==='machine'&&freeMode==='foot'){
   const r=machine.reactors.find(r=>Math.hypot(camera.position.x-(MACHINE.x+r.x),camera.position.z-(MACHINE.z+r.z+5.5))<3.5);
@@ -274,8 +288,8 @@ $('start').onclick=start;
 $('resume').onclick=start;
 $('reset').onclick=resetJourney;
 $('light').onclick=()=>{night=!night;$('light').textContent=night?'昼の街':'夜の街';};
-document.addEventListener('pointerlockchange',()=>{if(document.pointerLockElement!==renderer.domElement&&active&&!editorOpen)pause();});
-addEventListener('keydown',e=>{if(e.target.matches('select,input,textarea'))return;if(dialogueOpen){if(e.code==='Escape')closeDialogue();return;}if(['KeyW','KeyS','KeyA','KeyD','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space'].includes(e.code))e.preventDefault();keys.add(e.code);if(e.code==='Space'&&!e.repeat&&canAct())requestJump(body,journey.world);if(e.code==='KeyJ'&&!e.repeat)firePulse();if(e.code==='KeyC'&&!e.repeat)openDialogue();if(e.code==='KeyR'&&!e.repeat)$('reset').click();if(e.code==='KeyF'&&!e.repeat)interact();if(e.code==='KeyV'&&!e.repeat)toggleDrone();if(e.code==='KeyB'&&!e.repeat)toggleEditor();if(editorOpen&&!e.repeat){if(e.code==='KeyP')$('prop-place').click();if(e.code==='KeyT')$('prop-rotate').click();if(e.code==='Delete')$('prop-remove').click();if(e.code==='KeyZ')$('prop-undo').click();}if(e.code==='Escape'){closeEditor();pause();}});
+document.addEventListener('pointerlockchange',()=>{const locked=document.pointerLockElement===renderer.domElement;if(locked){pointerWasLocked=true;ignorePointerExit=false;return;}const lost=pointerWasLocked;pointerWasLocked=false;if(ignorePointerExit){ignorePointerExit=false;return;}if(lost&&active&&!editorOpen&&!dialogueOpen&&!lifeUI?.modal)pause();});
+addEventListener('keydown',e=>{if(lifeUI?.modal){if(e.code==='Escape'||/^Digit/.test(e.code))e.preventDefault();lifeUI.handleKey(e.code);return;}if(e.code==='KeyM'&&!e.repeat&&!e.target.matches('input,textarea,select')){e.preventDefault();lifeUI.openMap();return;}if(e.target.matches('select,input,textarea'))return;if(dialogueOpen){if(e.code==='Escape')closeDialogue();return;}if(['KeyW','KeyS','KeyA','KeyD','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space'].includes(e.code))e.preventDefault();keys.add(e.code);if(e.code==='Space'&&!e.repeat&&canAct())requestJump(body,journey.world);if(e.code==='KeyJ'&&!e.repeat)firePulse();if(e.code==='KeyC'&&!e.repeat)openDialogue();if(e.code==='KeyR'&&!e.repeat)$('reset').click();if(e.code==='KeyF'&&!e.repeat)interact();if(e.code==='KeyV'&&!e.repeat)toggleDrone();if(e.code==='KeyB'&&!e.repeat)toggleEditor();if(editorOpen&&!e.repeat){if(e.code==='KeyP')$('prop-place').click();if(e.code==='KeyT')$('prop-rotate').click();if(e.code==='Delete')$('prop-remove').click();if(e.code==='KeyZ')$('prop-undo').click();}if(e.code==='Escape'){closeEditor();pause();}});
 addEventListener('keyup',e=>keys.delete(e.code));addEventListener('blur',()=>keys.clear());
 let dragging=false,mouseTravel=0;renderer.domElement.addEventListener('mousedown',()=>{dragging=true;mouseTravel=0;});renderer.domElement.addEventListener('click',()=>{if(document.pointerLockElement||mouseTravel<6)firePulse();});addEventListener('mouseup',()=>dragging=false);
 addEventListener('mousemove',e=>{if(dragging)mouseTravel+=Math.abs(e.movementX)+Math.abs(e.movementY);if(active&&(document.pointerLockElement||dragging)){yaw-=e.movementX*.0018;pitch-=e.movementY*.0018;pitch=Math.max(-1.35,Math.min(1.3,pitch));}});
@@ -308,6 +322,7 @@ renderer.setAnimationLoop(()=>{
   const onPlatform=!upper&&journey.world==='city'&&camera.position.y>10&&Math.abs(camera.position.z+52)<3.5&&METRO_STOPS.some(s=>Math.abs(camera.position.x-s.x)<16);
   let floor=upper?expansion.lifts[upper.room].levels[upper.level]:journey.world==='planet'?galaxy.floorHeight(camera.position.x,camera.position.z):journey.world==='machine'?Math.max(machine.floorHeight(camera.position.x,camera.position.z,body.y),nearStation(journey,camera.position.x,camera.position.z)?.32:0):onPlatform?14.8:atCityStation?.32:(room||sidewalk)?.17:0;
   if(!upper&&!onPlatform&&!liftRide)floor=landmarks.floorHeight(journey.world,camera.position.x,camera.position.z,floor,body.y);
+  if(!upper&&!onPlatform&&!liftRide)floor=activityWorld.floorHeight(journey.world,camera.position.x,camera.position.z,body.y,floor);
   if(freeMode==='aircar')floor=camera.position.y-1.72;
   if(freeMode==='drone')floor=flightY-1.72;if(freeMode==='seat')floor=-.57;if(freeMode==='boat')floor=-.35;
   if(liftRide){if(active)liftRide.time+=realDt;const l=expansion.lifts[liftRide.room];floor=expansion.liftHeight(liftRide.from,liftRide.to,liftRide.time);l.cabin.position.y=floor;if(liftRide.time>=5){if(liftRide.level===0)upper=null;liftRide=null;}}
@@ -333,6 +348,8 @@ renderer.setAnimationLoop(()=>{
   const phase=signalPhase(elapsed);for(const b of bulbs){b.m.color.set(b.color===phase?({red:0xe33425,amber:0xffba35,green:0x36e4a2}[b.color]):0x101819);b.m.emissive.copy(b.m.color);b.m.emissiveIntensity=b.color===phase?2.2:0;}
   if(avatar){avatarClip.constant=camera.position.y-.35;avatar.position.set(camera.position.x,floor,camera.position.z);const f=forwardAxes[0];avatar.rotation.y=headingForMotion(-Math.sin(yaw),-Math.cos(yaw),f.x,f.z);if(avatarMixer)avatarMixer.update(moving?dt:0);avatar.visible=active&&!riding&&!metroRiding&&!liftRide&&!roverDriving&&freeMode==='foot';}
   landmarks.update(elapsed,camera,freeMode==='aircar');syncAtlasMenu();
+  const foundCard=activityWorld.update(elapsed,journey.world,camera,canAct(),lifeUI.circuitMask);if(foundCard&&collectCard(lifeState,foundCard.id)){saveLife();notify('観測カード「'+foundCard.name+'」を発見！ '+lifeState.cards.length+'/9'+(lifeState.cards.length===9?' · 星の観測者バッジを獲得！':''));}
+  lifeUI.update(elapsed,lifeContext());
   machine.update(dt,elapsed,quest,dialogueTarget);
   const event=adventure.update(dt,elapsed,journey.world,camera.position,canAct());if(event==='respawn'){camera.position.fromArray(MACHINE_STOP.exit);body.reset=true;notify('シールドを再起動して星港へ戻りました。修復の進行は保持しています。');}
   if(canAct()&&journey.world==='machine')for(const c of machine.cells)if(!quest.cells.includes(c.id)&&Math.hypot(camera.position.x-(MACHINE.x+c.x),camera.position.z-(MACHINE.z+c.z))<1.4&&Math.abs(camera.position.y-.72-c.ob.position.y)<1.25){quest.cells.push(c.id);saveQuest();notify(`修復部品を回収！ 所持 ${spareCells(quest)}個`);}
@@ -344,7 +361,7 @@ renderer.setAnimationLoop(()=>{
   scene.background=space>.5?new THREE.Color(0x020611):env;
   scene.fog.density=.0015*(1-space)+.000008*space;scene.fog.color.set(night?0x14212c:0xa8b4bb).lerp(new THREE.Color(0x030817),space);
   scene.backgroundIntensity=night?.07:.75;scene.environmentIntensity=(night?.2:.7)*(1-space)+.5*space;
-  sun.intensity=(night?.1:2.8)*(1-space)+3.1*space;hemisphere.intensity=(night?.42:1.7)*(1-space)+.9*space;
+  sun.intensity=(night?.1:3.1)*(1-space)+3.1*space;hemisphere.intensity=(night?.32:1.12)*(1-space)+.9*space;
   if(!space&&weather==='sunset'){sun.color.set(0xffad71);sun.intensity*=.7;scene.fog.color.set(0x967d7c);scene.backgroundIntensity*=.58;}else sun.color.set(0xffe2be);
   if(!space&&weather==='rain'){scene.fog.density=.0028;scene.fog.color.set(0x71818a);sun.intensity*=.35;scene.backgroundIntensity*=.45;}
   galaxy.stars.material.opacity=space;
@@ -395,6 +412,8 @@ renderer.setAnimationLoop(()=>{
   if(!riding&&!metroRiding&&!liftRide&&!upper&&!roverDriving){const site=landmarks.nearby(journey.world,camera.position);if(freeMode==='aircar'){action='F 工廠へ着陸 · Space 上昇 / X 下降';$('place').textContent='NEXUS-9 / イオンスキマー '+Math.round(camera.position.y)+'m';}else if(freeMode==='foot'&&site){action=site.id==='aeroworks'?'F 空飛ぶ車を操縦する':'F '+site.name+'を記録';$('place').textContent=site.name+' / 旅の記録 '+atlas.size+'/'+ATLAS_PLACES.length;}}
   document.documentElement.dataset.atlas=JSON.stringify({visited:[...atlas],world:journey.world,skyTraffic:landmarks.traffic.map(o=>o.position.toArray())});
   $('atlas-go').disabled=riding;
+  if(canAct()){const t=activityWorld.nearby(journey.world,camera.position);if(t)action='F '+t.name+(t.kind==='post'?'で配達':'で遊ぶ');}
+  if(lifeUI.modal){action='';$('interact').classList.add('hidden');}
   if(dialogueOpen){action='';$('interact').classList.add('hidden');}
   if(editorOpen){action='';$('interact').classList.add('hidden');}
   if(action){$('interact').textContent=action;$('interact').classList.remove('hidden');}else if(metroRiding||liftRide||onPlatform)$('interact').classList.add('hidden');
